@@ -1,0 +1,30 @@
+[package]
+name = "lightshotv2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+screenshots = "0.8"
+eframe = "0.27"
+egui = "0.27"
+global-hotkey = "0.6"
+arboard = "3.4"
+image = "0.24"
+reqwest = { version = "0.12", features = ["json", "multipart", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+rfd = "0.15"
+anyhow = "1.0"
+lazy_static = "1.4"
+crossbeam-channel = "0.5"
+rdev = "0.5"
+webbrowser = "1.0"
+imageproc = "0.23"
+rusttype = "0.9"
+egui_nerdfonts = "0.1"
+serde_json = "1.0"
+tempfile = "3.10"
+windows = { version = "0.56", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
+tiny-skia = "0.11"
+winit = "0.29"
+softbuffer = "0.4"
+tray-icon = "0.14"
