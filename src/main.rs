@@ -33,11 +33,10 @@ fn main() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
-            .with_visible(true) // ALWAYS visible to keep the loop alive
-            .with_transparent(true) // Essential for ghosting
-            .with_taskbar(false) // Hide from taskbar
-            .with_always_on_top() 
-            .with_inner_size([1.0, 1.0]), // Tiny starting size
+            .with_visible(true) // Must stay "visible" to keep the loop alive
+            .with_inner_size([0.0, 0.0]) // But 0x0 size
+            .with_taskbar(false) // No taskbar icon
+            .with_transparent(true),
         ..Default::default()
     };
 

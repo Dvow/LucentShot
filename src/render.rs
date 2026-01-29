@@ -1,5 +1,5 @@
 use image::{DynamicImage, Rgba};
-use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin};
+use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin, FillRule};
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale};
 use crate::overlay::{Shape, Tool};
@@ -119,22 +119,38 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: egu
                     let x2 = p2.x * ppp;
                     let y2 = p2.y * ppp;
 
-                    pb.move_to(x1, y1);
-                    pb.line_to(x2, y2);
-                    
                     let dx = x2 - x1;
                     let dy = y2 - y1;
-                    let len = (dx*dx + dy*dy).sqrt();
+                    let len = (dx * dx + dy * dy).sqrt();
                     if len > 0.0 {
                         let ux = dx / len;
                         let uy = dy / len;
-                        let h_len = 20.0 * ppp;
-                        let h_wid = 15.0 * ppp;
-                        
+                        let head_len = 14.4 * ppp;
+                        let head_wid = 8.4 * ppp;
+
+                        let shaft_end_x = x2 - ux * head_len;
+                        let shaft_end_y = y2 - uy * head_len;
+                        pb.move_to(x1, y1);
+                        pb.line_to(shaft_end_x, shaft_end_y);
+
+                        let left_x = x2 - ux * head_len - uy * (head_wid * 0.5);
+                        let left_y = y2 - uy * head_len + ux * (head_wid * 0.5);
+                        let right_x = x2 - ux * head_len + uy * (head_wid * 0.5);
+                        let right_y = y2 - uy * head_len - ux * (head_wid * 0.5);
+
+                        let mut head_pb = PathBuilder::new();
+                        head_pb.move_to(x2, y2);
+                        head_pb.line_to(left_x, left_y);
+                        head_pb.line_to(right_x, right_y);
+                        head_pb.close();
+                        if let Some(head_path) = head_pb.finish() {
+                            pixmap.fill_path(&head_path, &paint, FillRule::Winding, tiny_skia::Transform::identity(), None);
+                        }
+
                         pb.move_to(x2, y2);
-                        pb.line_to(x2 - ux * h_len - uy * h_wid, y2 - uy * h_len + ux * h_wid);
+                        pb.line_to(left_x, left_y);
                         pb.move_to(x2, y2);
-                        pb.line_to(x2 - ux * h_len + uy * h_wid, y2 - uy * h_len - ux * h_wid);
+                        pb.line_to(right_x, right_y);
                     }
 
                     if let Some(path) = pb.finish() {

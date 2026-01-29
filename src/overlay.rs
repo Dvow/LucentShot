@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs;
+use std::path::PathBuf;
 use tray_icon::menu::MenuEvent;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -21,7 +23,6 @@ pub struct Shape {
     pub opacity: f32,
 }
 
-#[derive(Clone)]
 pub enum PendingAction {
     Copy,
     Save,
@@ -47,6 +48,7 @@ pub struct OverlayApp {
     pub start_pos: Option<Pos2>,
     pub current_tool: Tool,
     pub current_color: Color32,
+    pub last_saved_color: Color32,
     pub shapes: Vec<Shape>,
     pub active_shape: Option<Shape>,
     pub is_active: bool,
@@ -67,6 +69,8 @@ pub struct OverlayApp {
 
 impl OverlayApp {
     pub fn new_background(trigger_flag: Arc<AtomicBool>) -> Self {
+        let print_settings = load_print_settings();
+        let saved_color = load_saved_color();
         Self {
             screenshot: None,
             texture: None,
@@ -75,22 +79,23 @@ impl OverlayApp {
             resizing_node: None,
             start_pos: None,
             current_tool: Tool::Pen,
-            current_color: Color32::RED,
+            current_color: saved_color,
+            last_saved_color: saved_color,
             shapes: Vec::new(),
             active_shape: None,
             is_active: false,
             trigger_flag,
-            marker_opacity: 0.4,
+            marker_opacity: load_marker_opacity(),
             editing_text_index: None,
             show_print_popup: false,
             cropped_preview: None,
             printers: Vec::new(),
-            selected_printer: String::new(),
-            print_copies: 1,
-            print_landscape: false,
-            print_grayscale: false,
-            print_paper_size: "A4".to_string(),
-            print_fit_to_page: true,
+            selected_printer: print_settings.selected_printer,
+            print_copies: print_settings.copies,
+            print_landscape: print_settings.landscape,
+            print_grayscale: print_settings.grayscale,
+            print_paper_size: print_settings.paper,
+            print_fit_to_page: print_settings.fit,
             pending_action: None,
         }
     }
@@ -112,14 +117,15 @@ impl OverlayApp {
             self.active_shape = None;
             self.editing_text_index = None;
             self.pending_action = None;
-            self.show_print_popup = false;
+            self.current_tool = Tool::Pen;
             self.is_active = true;
             
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            ctx.memory_mut(|m| m.close_popup());
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
-            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
         }
     }
 
@@ -128,10 +134,10 @@ impl OverlayApp {
         self.show_print_popup = false;
         self.pending_action = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     }
 
     fn request_final_screenshot(&mut self, ctx: &egui::Context, action: PendingAction) {
@@ -141,13 +147,13 @@ impl OverlayApp {
 
     fn process_screenshot(&mut self, ctx: &egui::Context, color_image: egui::ColorImage) {
         let action = if let Some(a) = self.pending_action.take() { a } else { return };
-        let sel_rect = if let Some(s) = self.selection { Rect::from_two_pos(s.min, s.max) } else { return };
+        let sel = if let Some(s) = self.selection { Rect::from_two_pos(s.min, s.max) } else { return };
         
         let ppp = ctx.pixels_per_point();
-        let x = (sel_rect.min.x * ppp).round() as u32;
-        let y = (sel_rect.min.y * ppp).round() as u32;
-        let w = (sel_rect.width() * ppp).round() as u32;
-        let h = (sel_rect.height() * ppp).round() as u32;
+        let x = (sel.min.x * ppp).round() as u32;
+        let y = (sel.min.y * ppp).round() as u32;
+        let w = (sel.width() * ppp).round() as u32;
+        let h = (sel.height() * ppp).round() as u32;
 
         let pixels = color_image.as_raw();
         let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(color_image.width() as u32, color_image.height() as u32, pixels.to_vec()).unwrap();
@@ -166,9 +172,11 @@ impl OverlayApp {
             match action {
                 PendingAction::Copy => {
                     let _ = crate::actions::copy_to_clipboard(&cropped);
+                    println!("SUCCESS: Copied to clipboard.");
                 }
                 PendingAction::Save => {
                     let _ = crate::actions::save_to_file(&cropped);
+                    println!("SUCCESS: Saved to file.");
                 }
                 PendingAction::Upload => {
                     if let Ok(url) = crate::actions::prntsc_upload(&cropped) {
@@ -204,7 +212,13 @@ impl OverlayApp {
         let color_image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as _, rgba.height() as _], rgba.as_raw());
         self.cropped_preview = Some(ctx.load_texture("print_preview", color_image, Default::default()));
         self.printers = crate::actions::get_printers();
-        if !self.printers.is_empty() { self.selected_printer = self.printers[0].clone(); }
+        if self.selected_printer.is_empty()
+            || !self.printers.iter().any(|p| p == &self.selected_printer)
+        {
+            if let Some(first) = self.printers.first() {
+                self.selected_printer = first.clone();
+            }
+        }
         self.show_print_popup = true;
     }
 
@@ -221,6 +235,105 @@ impl OverlayApp {
             Rect::from_center_size(egui::pos2(rect.left(), rect.center().y), egui::vec2(size, size)),
         ]
     }
+}
+
+fn marker_opacity_path() -> PathBuf {
+    std::env::temp_dir().join("lightshotv2_marker_opacity.txt")
+}
+
+fn load_marker_opacity() -> f32 {
+    let default_opacity = 0.4;
+    let path = marker_opacity_path();
+    let Ok(contents) = fs::read_to_string(path) else { return default_opacity };
+    let Ok(value) = contents.trim().parse::<f32>() else { return default_opacity };
+    value.clamp(0.1, 1.0)
+}
+
+fn save_marker_opacity(value: f32) {
+    let path = marker_opacity_path();
+    let _ = fs::write(path, format!("{:.3}", value));
+}
+
+fn color_settings_path() -> PathBuf {
+    std::env::temp_dir().join("lightshotv2_color.txt")
+}
+
+fn load_saved_color() -> Color32 {
+    let default_color = Color32::RED;
+    let Ok(contents) = fs::read_to_string(color_settings_path()) else { return default_color };
+    let mut parts = contents.trim().split(',');
+    let r = parts.next().and_then(|v| v.parse::<u8>().ok());
+    let g = parts.next().and_then(|v| v.parse::<u8>().ok());
+    let b = parts.next().and_then(|v| v.parse::<u8>().ok());
+    let a = parts.next().and_then(|v| v.parse::<u8>().ok());
+    if let (Some(r), Some(g), Some(b), Some(a)) = (r, g, b, a) {
+        Color32::from_rgba_unmultiplied(r, g, b, a)
+    } else {
+        default_color
+    }
+}
+
+fn save_color(color: Color32) {
+    let content = format!("{},{},{},{}", color.r(), color.g(), color.b(), color.a());
+    let _ = fs::write(color_settings_path(), content);
+}
+
+struct PrintSettings {
+    selected_printer: String,
+    copies: i32,
+    landscape: bool,
+    grayscale: bool,
+    fit: bool,
+    paper: String,
+}
+
+fn print_settings_path() -> PathBuf {
+    std::env::temp_dir().join("lightshotv2_print_settings.txt")
+}
+
+fn load_print_settings() -> PrintSettings {
+    let defaults = PrintSettings {
+        selected_printer: String::new(),
+        copies: 1,
+        landscape: false,
+        grayscale: false,
+        fit: true,
+        paper: "A4".to_string(),
+    };
+    let Ok(contents) = fs::read_to_string(print_settings_path()) else {
+        return defaults;
+    };
+    let mut settings = defaults;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else { continue };
+        match key.trim() {
+            "printer" => settings.selected_printer = value.trim().to_string(),
+            "copies" => {
+                if let Ok(v) = value.trim().parse::<i32>() {
+                    settings.copies = v.clamp(1, 99);
+                }
+            }
+            "landscape" => settings.landscape = value.trim() == "1",
+            "grayscale" => settings.grayscale = value.trim() == "1",
+            "fit" => settings.fit = value.trim() == "1",
+            "paper" => settings.paper = value.trim().to_string(),
+            _ => {}
+        }
+    }
+    settings
+}
+
+fn save_print_settings(settings: &PrintSettings) {
+    let content = format!(
+        "printer={}\ncopies={}\nlandscape={}\ngrayscale={}\nfit={}\npaper={}\n",
+        settings.selected_printer,
+        settings.copies.clamp(1, 99),
+        if settings.landscape { "1" } else { "0" },
+        if settings.grayscale { "1" } else { "0" },
+        if settings.fit { "1" } else { "0" },
+        settings.paper
+    );
+    let _ = fs::write(print_settings_path(), content);
 }
 
 impl eframe::App for OverlayApp {
@@ -247,8 +360,13 @@ impl eframe::App for OverlayApp {
         }
 
         if !self.is_active {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
+        }
+
+        if self.current_color != self.last_saved_color {
+            save_color(self.current_color);
+            self.last_saved_color = self.current_color;
         }
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -293,14 +411,6 @@ impl eframe::App for OverlayApp {
             if trigger_upload { self.request_final_screenshot(ctx, PendingAction::Upload); return; }
             if trigger_google { self.request_final_screenshot(ctx, PendingAction::Google); return; }
             if trigger_print { self.prepare_print_preview(ctx, sel); return; }
-        }
-
-        if self.texture.is_none() {
-            if let Some(img) = &self.screenshot {
-                let rgba = img.as_rgba8().unwrap();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as _, rgba.height() as _], rgba.as_raw());
-                self.texture = Some(ctx.load_texture("screenshot", color_image, Default::default()));
-            }
         }
 
         egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
@@ -387,7 +497,20 @@ impl eframe::App for OverlayApp {
                         }
                         self.selection = Some(sel);
                     }
-                } else if let Some(shape) = &mut self.active_shape { shape.points.push(pointer_pos); }
+                } else if let Some(shape) = &mut self.active_shape {
+                    let min_dist = if shape.is_marker {
+                        (shape.stroke_width * 0.35).max(2.0)
+                    } else {
+                        1.0
+                    };
+                    let should_push = match shape.points.last() {
+                        Some(last) => (pointer_pos - *last).length() >= min_dist,
+                        None => true,
+                    };
+                    if should_push {
+                        shape.points.push(pointer_pos);
+                    }
+                }
             }
 
             if response.drag_stopped() {
@@ -409,6 +532,14 @@ impl OverlayApp {
         egui::Window::new("Lightshot - Print").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
             ui.set_width(400.0);
             ui.vertical_centered(|ui| {
+                let before = (
+                    self.selected_printer.clone(),
+                    self.print_copies,
+                    self.print_landscape,
+                    self.print_grayscale,
+                    self.print_fit_to_page,
+                    self.print_paper_size.clone(),
+                );
                 ui.heading("Print Selection");
                 ui.add_space(10.0);
                 if let Some(texture) = &self.cropped_preview {
@@ -448,24 +579,35 @@ impl OverlayApp {
                 ui.horizontal(|ui| {
                     let btn_width = (ui.available_width() - 10.0) / 2.0;
                     if ui.add_sized([btn_width, 30.0], egui::Button::new("Print")).clicked() {
-                        let printer_name = self.selected_printer.clone();
-                        let copies = self.print_copies;
-                        let landscape = self.print_landscape;
-                        let grayscale = self.print_grayscale;
-                        let fit = self.print_fit_to_page;
-                        let paper = self.print_paper_size.clone();
-                        
                         self.request_final_screenshot(ctx, PendingAction::Print {
-                            printer: printer_name,
-                            copies,
-                            landscape,
-                            grayscale,
-                            fit,
-                            paper,
+                            printer: self.selected_printer.clone(),
+                            copies: self.print_copies,
+                            landscape: self.print_landscape,
+                            grayscale: self.print_grayscale,
+                            fit: self.print_fit_to_page,
+                            paper: self.print_paper_size.clone(),
                         });
                     }
                     if ui.add_sized([btn_width, 30.0], egui::Button::new("Cancel")).clicked() { self.show_print_popup = false; self.cropped_preview = None; }
                 });
+                let after = (
+                    self.selected_printer.clone(),
+                    self.print_copies,
+                    self.print_landscape,
+                    self.print_grayscale,
+                    self.print_fit_to_page,
+                    self.print_paper_size.clone(),
+                );
+                if before != after {
+                    save_print_settings(&PrintSettings {
+                        selected_printer: self.selected_printer.clone(),
+                        copies: self.print_copies,
+                        landscape: self.print_landscape,
+                        grayscale: self.print_grayscale,
+                        fit: self.print_fit_to_page,
+                        paper: self.print_paper_size.clone(),
+                    });
+                }
             });
         });
     }
@@ -494,7 +636,26 @@ impl OverlayApp {
                 if shape.points.len() > 1 {
                     let start = shape.points[0];
                     let end = *shape.points.last().unwrap();
-                    painter.arrow(start, end - start, stroke);
+                    let dir = end - start;
+                    let len = dir.length();
+                    if len > 0.0 {
+                        let unit = dir / len;
+                        let head_len = 14.4;
+                        let head_wid = 8.4;
+                        let tip = end;
+                        let left = tip - unit * head_len + egui::vec2(-unit.y, unit.x) * (head_wid * 0.5);
+                        let right = tip - unit * head_len + egui::vec2(unit.y, -unit.x) * (head_wid * 0.5);
+                        let shaft_end = tip - unit * head_len;
+                        let fill_color = if shape.is_marker { shape.color.gamma_multiply(shape.opacity) } else { shape.color };
+                        painter.line_segment([start, shaft_end], stroke);
+                        painter.add(egui::epaint::Shape::convex_polygon(
+                            vec![tip, left, right],
+                            fill_color,
+                            Stroke::NONE,
+                        ));
+                        painter.line_segment([tip, left], stroke);
+                        painter.line_segment([tip, right], stroke);
+                    }
                 }
             }
             Tool::Text => { if let Some(pos) = shape.points.first() { painter.text(*pos, egui::Align2::LEFT_TOP, &shape.text, egui::FontId::proportional(20.0), color); } }
@@ -524,7 +685,16 @@ impl OverlayApp {
                     ui.add_space(2.0);
                     if ui.selectable_label(self.current_tool == Tool::Text, FONT).on_hover_text("Text Tool").clicked() { self.current_tool = Tool::Text; }
                     ui.separator();
-                    ui.scope(|ui| { ui.spacing_mut().interact_size = egui::vec2(20.0, 20.0); ui.color_edit_button_srgba(&mut self.current_color) }).response.on_hover_text("Change Color");
+                    let color_response = ui
+                        .scope(|ui| {
+                            ui.spacing_mut().interact_size = egui::vec2(20.0, 20.0);
+                            ui.color_edit_button_srgba(&mut self.current_color)
+                        })
+                        .response
+                        .on_hover_text("Change Color");
+                    if color_response.changed() {
+                        save_color(self.current_color);
+                    }
                     ui.add_space(2.0);
                     if ui.button(UNDO).on_hover_text("Undo (Ctrl+Z)").clicked() { self.shapes.pop(); }
                 });
@@ -554,7 +724,14 @@ impl OverlayApp {
                     let (rect, _) = ui.allocate_at_least(egui::vec2(14.0, 14.0), egui::Sense::hover());
                     ui.painter().circle_filled(rect.center(), 7.0, self.current_color.gamma_multiply(self.marker_opacity));
                     ui.painter().circle_stroke(rect.center(), 7.0, Stroke::new(1.0, Color32::GRAY));
-                    ui.add(egui::Slider::new(&mut self.marker_opacity, 0.1..=1.0).show_value(false).trailing_fill(true));
+                    let response = ui.add(
+                        egui::Slider::new(&mut self.marker_opacity, 0.1..=1.0)
+                            .show_value(false)
+                            .trailing_fill(true),
+                    );
+                    if response.changed() {
+                        save_marker_opacity(self.marker_opacity);
+                    }
                 });
             });
         }
