@@ -18,6 +18,7 @@ use tray_icon::{
 
 fn main() {
     config::init();
+    actions::cleanup_old_copy_temp_files();
     let icon_data = vec![150u8; 32 * 32 * 4]; 
     let tray_icon = Icon::from_rgba(icon_data, 32, 32).expect("Failed to create tray icon");
 

@@ -158,6 +158,9 @@ impl OverlayApp {
         self.is_active = false;
         self.show_print_popup = false;
         self.pending_action = None;
+        self.texture = None;
+        self.screenshot = None;
+        self.cropped_preview = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
@@ -363,7 +366,7 @@ impl eframe::App for OverlayApp {
         }
 
         if !self.is_active && !self.show_settings {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
             return;
         }
 

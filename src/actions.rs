@@ -5,7 +5,7 @@ use rfd::FileDialog;
 use anyhow::{Result, anyhow};
 use std::borrow::Cow;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::io::Cursor;
 use std::fs;
 use std::path::PathBuf;
@@ -514,6 +514,26 @@ fn save_image_with_config(
     let bytes = encode_image_bytes(img, format, jpeg_quality)?;
     fs::write(path, bytes)?;
     Ok(())
+}
+
+pub fn cleanup_old_copy_temp_files() {
+    let temp_dir = std::env::temp_dir().join("lightshotv2");
+    let Ok(entries) = fs::read_dir(&temp_dir) else { return };
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(3600))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.starts_with("copy_") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if modified < cutoff {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn save_temp_image(
