@@ -1,5 +1,6 @@
 use arboard::{Clipboard, ImageData};
 use image::{DynamicImage, GrayImage, imageops::FilterType};
+use image::codecs::jpeg::JpegEncoder;
 use rfd::FileDialog;
 use anyhow::{Result, anyhow};
 use std::borrow::Cow;
@@ -11,15 +12,60 @@ use std::path::PathBuf;
 use imageproc::contrast::{otsu_level, threshold_mut};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use serde_json::json;
 
-pub fn copy_to_clipboard(img: &DynamicImage) -> Result<()> {
+pub enum CopyResult {
+    Image,
+    File,
+}
+
+pub fn copy_to_clipboard(
+    img: &DynamicImage,
+    format: crate::config::ImageFormat,
+    jpeg_quality: u8,
+) -> Result<CopyResult> {
+    if matches!(format, crate::config::ImageFormat::Png) {
+        return copy_image_to_clipboard(img).map(|_| CopyResult::Image);
+    }
+
+    let path = save_temp_image(img, format, jpeg_quality)?;
+    #[cfg(target_os = "windows")]
+    {
+        set_clipboard_file(&path)?;
+        return Ok(CopyResult::File);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut last_err = anyhow!("Failed to initialize clipboard");
+        for i in 0..5 {
+            match Clipboard::new() {
+                Ok(mut clipboard) => {
+                    if let Err(e) = clipboard.set_text(path.display().to_string()) {
+                        last_err = anyhow!("arboard set_text failed: {}", e);
+                        thread::sleep(Duration::from_millis(50 * (i + 1)));
+                        continue;
+                    }
+                    return Ok(CopyResult::File);
+                }
+                Err(e) => {
+                    last_err = anyhow!("arboard init failed: {}", e);
+                    thread::sleep(Duration::from_millis(50 * (i + 1)));
+                }
+            }
+        }
+        Err(last_err)
+    }
+}
+
+fn copy_image_to_clipboard(img: &DynamicImage) -> Result<()> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     let bytes = rgba.into_raw();
-    
+
     let mut last_err = anyhow!("Failed to initialize clipboard");
-    
+
     for i in 0..5 {
         match Clipboard::new() {
             Ok(mut clipboard) => {
@@ -28,7 +74,7 @@ pub fn copy_to_clipboard(img: &DynamicImage) -> Result<()> {
                     height: height as usize,
                     bytes: Cow::Owned(bytes.clone()),
                 };
-                
+
                 if let Err(e) = clipboard.set_image(image_data) {
                     last_err = anyhow!("arboard set_image failed: {}", e);
                     thread::sleep(Duration::from_millis(50 * (i + 1)));
@@ -42,40 +88,48 @@ pub fn copy_to_clipboard(img: &DynamicImage) -> Result<()> {
             }
         }
     }
-    
+
     Err(last_err)
 }
 
-pub fn save_to_file(img: &DynamicImage) -> Result<()> {
+pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
+    let config = crate::config::cfg();
+    let (ext, filter_label) = format_extension_and_label(config.format);
     let mut i = 1;
-    let mut file_name = format!("screenshot_{}.png", i);
+    let mut file_name = format!("screenshot_{}.{}", i, ext);
     
     // We'll use the user's Pictures folder as a starting point if available
     let start_dir = std::env::var("USERPROFILE")
         .map(|p| std::path::Path::new(&p).join("Pictures"))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    // Find the first available screenshot_N.png name in the target directory
+    // Find the first available screenshot_N.ext name in the target directory
     while start_dir.join(&file_name).exists() {
         i += 1;
-        file_name = format!("screenshot_{}.png", i);
+        file_name = format!("screenshot_{}.{}", i, ext);
     }
 
     if let Some(path) = FileDialog::new()
-        .add_filter("PNG", &["png"])
+        .add_filter(filter_label, &[ext])
         .set_directory(&start_dir)
         .set_file_name(&file_name)
         .save_file() {
-        if let Err(e) = img.save(path) {
+        let target_path = if path.extension().is_some() {
+            path
+        } else {
+            path.with_extension(ext)
+        };
+        if let Err(e) = save_image_with_config(img, &target_path, config.format, config.jpeg_quality) {
             eprintln!("Failed to save image: {}", e);
         }
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
-    let mut buf = Vec::new();
-    img.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)?;
+    let config = crate::config::cfg();
+    let (bytes, ext, mime) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -83,9 +137,9 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
 
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
-        .part("fileToUpload", reqwest::blocking::multipart::Part::bytes(buf)
-            .file_name("screenshot.png")
-            .mime_str("image/png")?);
+        .part("fileToUpload", reqwest::blocking::multipart::Part::bytes(bytes)
+            .file_name(format!("screenshot.{}", ext))
+            .mime_str(mime)?);
 
     let resp = client.post("https://catbox.moe/user/api.php")
         .multipart(form)
@@ -219,47 +273,6 @@ fn upscale_gray(img: &GrayImage, factor: u32) -> GrayImage {
     image::imageops::resize(img, width, height, FilterType::Lanczos3)
 }
 
-pub struct TtsSettings {
-    pub rate: i32,
-    pub volume: i32,
-}
-
-fn tts_settings_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("lightshotv2_tts_settings.txt")
-}
-
-pub fn load_tts_settings() -> TtsSettings {
-    let defaults = TtsSettings { rate: 0, volume: 100 };
-    let Ok(contents) = fs::read_to_string(tts_settings_path()) else { return defaults };
-    let mut settings = defaults;
-    for line in contents.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
-        match key.trim() {
-            "rate" => {
-                if let Ok(v) = value.trim().parse::<i32>() {
-                    settings.rate = v.clamp(-10, 10);
-                }
-            }
-            "volume" => {
-                if let Ok(v) = value.trim().parse::<i32>() {
-                    settings.volume = v.clamp(0, 100);
-                }
-            }
-            _ => {}
-        }
-    }
-    settings
-}
-
-pub fn save_tts_settings(settings: &TtsSettings) {
-    let content = format!(
-        "rate={}\nvolume={}\n",
-        settings.rate.clamp(-10, 10),
-        settings.volume.clamp(0, 100),
-    );
-    let _ = fs::write(tts_settings_path(), content);
-}
-
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     let text = match image_to_text(img) {
         Ok(text) => text,
@@ -276,7 +289,7 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     }
     let path = std::env::temp_dir().join("lightshotv2_tts.txt");
     fs::write(&path, trimmed)?;
-    let settings = load_tts_settings();
+    let settings = crate::config::cfg();
 
     #[cfg(target_os = "windows")]
     {
@@ -288,8 +301,8 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
              $s.Volume = {}; \
              $s.Speak($t);",
             path.display().to_string().replace("'", "''")
-            ,settings.rate
-            ,settings.volume
+            ,settings.tts_rate
+            ,settings.tts_volume
         );
         let output = std::process::Command::new("powershell")
             .args(["-NoProfile", "-Command", &script])
@@ -441,5 +454,131 @@ pub fn print_image_to(
         }
     }
 
+    Ok(())
+}
+
+fn format_extension_and_label(format: crate::config::ImageFormat) -> (&'static str, &'static str) {
+    match format {
+        crate::config::ImageFormat::Png => ("png", "PNG"),
+        crate::config::ImageFormat::Jpeg => ("jpg", "JPEG"),
+        crate::config::ImageFormat::Bmp => ("bmp", "BMP"),
+        crate::config::ImageFormat::Gif => ("gif", "GIF"),
+    }
+}
+
+fn encode_image_for_upload(
+    img: &DynamicImage,
+    format: crate::config::ImageFormat,
+    jpeg_quality: u8,
+) -> Result<(Vec<u8>, &'static str, &'static str)> {
+    let (ext, mime) = match format {
+        crate::config::ImageFormat::Png => ("png", "image/png"),
+        crate::config::ImageFormat::Jpeg => ("jpg", "image/jpeg"),
+        crate::config::ImageFormat::Bmp => ("bmp", "image/bmp"),
+        crate::config::ImageFormat::Gif => ("gif", "image/gif"),
+    };
+    let bytes = encode_image_bytes(img, format, jpeg_quality)?;
+    Ok((bytes, ext, mime))
+}
+
+fn encode_image_bytes(
+    img: &DynamicImage,
+    format: crate::config::ImageFormat,
+    jpeg_quality: u8,
+) -> Result<Vec<u8>> {
+    match format {
+        crate::config::ImageFormat::Jpeg => {
+            let mut buf = Vec::new();
+            let mut encoder = JpegEncoder::new_with_quality(&mut buf, jpeg_quality.clamp(1, 100));
+            encoder.encode_image(img)?;
+            Ok(buf)
+        }
+        crate::config::ImageFormat::Png => encode_with_format(img, image::ImageFormat::Png),
+        crate::config::ImageFormat::Bmp => encode_with_format(img, image::ImageFormat::Bmp),
+        crate::config::ImageFormat::Gif => encode_with_format(img, image::ImageFormat::Gif),
+    }
+}
+
+fn encode_with_format(img: &DynamicImage, format: image::ImageFormat) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    img.write_to(&mut Cursor::new(&mut buf), format)?;
+    Ok(buf)
+}
+
+fn save_image_with_config(
+    img: &DynamicImage,
+    path: &std::path::Path,
+    format: crate::config::ImageFormat,
+    jpeg_quality: u8,
+) -> Result<()> {
+    let bytes = encode_image_bytes(img, format, jpeg_quality)?;
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+fn save_temp_image(
+    img: &DynamicImage,
+    format: crate::config::ImageFormat,
+    jpeg_quality: u8,
+) -> Result<std::path::PathBuf> {
+    let (ext, _) = format_extension_and_label(format);
+    let temp_dir = std::env::temp_dir().join("lightshotv2");
+    fs::create_dir_all(&temp_dir)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = temp_dir.join(format!("copy_{}.{}", stamp, ext));
+    save_image_with_config(img, &path, format, jpeg_quality)?;
+    Ok(path)
+}
+
+#[cfg(target_os = "windows")]
+fn set_clipboard_file(path: &std::path::Path) -> Result<()> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+    };
+    use windows_sys::Win32::UI::Shell::DROPFILES;
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide.push(0);
+
+    let dropfiles_size = std::mem::size_of::<DROPFILES>();
+    let bytes_len = wide.len() * std::mem::size_of::<u16>();
+    let total_size = dropfiles_size + bytes_len;
+
+    const CF_HDROP: u32 = 15;
+    unsafe {
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size);
+        if hglobal.is_null() {
+            return Err(anyhow!("Failed to allocate clipboard memory"));
+        }
+        let ptr = GlobalLock(hglobal) as *mut u8;
+        if ptr.is_null() {
+            return Err(anyhow!("Failed to lock clipboard memory"));
+        }
+
+        let dropfiles = ptr as *mut DROPFILES;
+        (*dropfiles).pFiles = dropfiles_size as u32;
+        (*dropfiles).fWide = 1;
+
+        let list_ptr = ptr.add(dropfiles_size) as *mut u16;
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), list_ptr, wide.len());
+        GlobalUnlock(hglobal);
+
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err(anyhow!("Failed to open clipboard"));
+        }
+        let _ = EmptyClipboard();
+        if SetClipboardData(CF_HDROP, hglobal) == std::ptr::null_mut() {
+            let _ = CloseClipboard();
+            return Err(anyhow!("Failed to set clipboard file"));
+        }
+        let _ = CloseClipboard();
+    }
     Ok(())
 }

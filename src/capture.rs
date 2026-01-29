@@ -8,13 +8,16 @@ pub struct RawCapture {
 }
 
 #[cfg(target_os = "windows")]
-pub fn capture_primary_screen_raw() -> Result<RawCapture> {
+pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     use windows::Win32::Graphics::Gdi::{
         GetDC, ReleaseDC, CreateCompatibleDC, CreateCompatibleBitmap, 
         SelectObject, BitBlt, DeleteDC, DeleteObject, GetDIBits,
         SRCCOPY, DIB_RGB_COLORS, BITMAPINFOHEADER, BI_RGB,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DrawIconEx, GetCursorInfo, GetIconInfo, GetSystemMetrics, CURSORINFO, CURSOR_SHOWING,
+        DI_NORMAL, SM_CXSCREEN, SM_CYSCREEN,
+    };
 
     unsafe {
         let width = GetSystemMetrics(SM_CXSCREEN);
@@ -27,6 +30,29 @@ pub fn capture_primary_screen_raw() -> Result<RawCapture> {
         
         // HARDWARE BITBLT - FASTEST POSSIBLE CAPTURE
         BitBlt(h_dc_mem, 0, 0, width, height, h_dc_screen, 0, 0, SRCCOPY)?;
+
+        if include_cursor {
+            let mut cursor_info = CURSORINFO {
+                cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetCursorInfo(&mut cursor_info).is_ok()
+                && cursor_info.flags == CURSOR_SHOWING
+            {
+                let mut icon_info = Default::default();
+                if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_ok() {
+                    let x = cursor_info.ptScreenPos.x - icon_info.xHotspot as i32;
+                    let y = cursor_info.ptScreenPos.y - icon_info.yHotspot as i32;
+                    let _ = DrawIconEx(h_dc_mem, x, y, cursor_info.hCursor, 0, 0, 0, None, DI_NORMAL);
+                    if icon_info.hbmMask.0 != 0 {
+                        let _ = DeleteObject(icon_info.hbmMask);
+                    }
+                    if icon_info.hbmColor.0 != 0 {
+                        let _ = DeleteObject(icon_info.hbmColor);
+                    }
+                }
+            }
+        }
 
         let mut bmi = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,

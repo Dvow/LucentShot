@@ -2903,6 +2903,7 @@ dependencies = [
  "rfd",
  "rusttype",
  "screenshots",
+ "serde",
  "serde_json",
  "softbuffer",
  "tempfile",
@@ -2911,6 +2912,7 @@ dependencies = [
  "tray-icon",
  "webbrowser 1.0.6",
  "windows 0.56.0",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

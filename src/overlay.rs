@@ -5,43 +5,11 @@ use std::sync::Arc;
 use std::thread;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::fs;
-use std::path::PathBuf;
 use tray_icon::menu::MenuEvent;
+use crate::config::{PendingAction, Shape, Tool};
 
 pub const MENU_ID_QUIT: &str = "menu_quit";
-pub const MENU_ID_TTS_SETTINGS: &str = "menu_tts_settings";
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Tool { Pen, Line, Arrow, Rect, Marker, Text }
-
-#[derive(Clone)]
-pub struct Shape {
-    pub points: Vec<Pos2>,
-    pub color: Color32,
-    pub stroke_width: f32,
-    pub tool: Tool,
-    pub text: String,
-    pub is_marker: bool,
-    pub opacity: f32,
-}
-
-pub enum PendingAction {
-    Copy,
-    Save,
-    Upload,
-    OCR,
-    Speak,
-    Print {
-        printer: String,
-        copies: i32,
-        landscape: bool,
-        grayscale: bool,
-        fit: bool,
-        paper: String,
-    },
-    Google,
-}
+pub const MENU_ID_SETTINGS: &str = "menu_settings";
 
 pub struct OverlayApp {
     pub screenshot: Option<Arc<DynamicImage>>,
@@ -68,17 +36,58 @@ pub struct OverlayApp {
     pub print_grayscale: bool,
     pub print_paper_size: String,
     pub print_fit_to_page: bool,
-    pub show_tts_settings: bool,
-    pub tts_rate: i32,
-    pub tts_volume: i32,
+    pub show_settings: bool,
+    pub settings_state: crate::ui::SettingsWindowState,
+    pub config: crate::config::ConfigImpl,
+    pub hotkey_handle: crate::hotkey::HotkeyHandle,
+    pub hotkey_rx: std::sync::mpsc::Receiver<crate::hotkey::HotkeyEvent>,
     pub pending_action: Option<PendingAction>,
 }
 
 impl OverlayApp {
-    pub fn new_background(trigger_flag: Arc<AtomicBool>) -> Self {
-        let print_settings = load_print_settings();
-        let saved_color = load_saved_color();
-        let tts_settings = crate::actions::load_tts_settings();
+    fn handle_instant_action(&self, action: PendingAction) {
+        let include_cursor = self.config.general_capture_cursor;
+        let auto_copy_link = self.config.general_auto_copy_link;
+        let auto_close_upload = self.config.general_auto_close_upload;
+        thread::spawn(move || {
+            let Ok(raw) = crate::capture::capture_primary_screen_raw(include_cursor) else { return };
+            let width = raw.width;
+            let height = raw.height;
+            let color_image = crate::capture::raw_to_color_image(raw);
+            let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                width as u32,
+                height as u32,
+                color_image.as_raw().to_vec(),
+            )
+            .unwrap();
+            let img = image::DynamicImage::ImageRgba8(img_buffer);
+            match action {
+                PendingAction::Save => {
+                    if let Ok(saved) = crate::actions::save_to_file(&img) {
+                        let _ = saved;
+                    }
+                }
+                PendingAction::Upload => {
+                    if let Ok(url) = crate::actions::prntsc_upload(&img) {
+                        handle_upload_result(&url, auto_copy_link, auto_close_upload);
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+    pub fn new_background(
+        trigger_flag: Arc<AtomicBool>,
+        hotkey_handle: crate::hotkey::HotkeyHandle,
+        hotkey_rx: std::sync::mpsc::Receiver<crate::hotkey::HotkeyEvent>,
+    ) -> Self {
+        let config = crate::config::cfg().clone();
+        let saved_color = egui::Color32::from_rgba_unmultiplied(
+            config.color_r,
+            config.color_g,
+            config.color_b,
+            config.color_a,
+        );
         Self {
             screenshot: None,
             texture: None,
@@ -93,26 +102,28 @@ impl OverlayApp {
             active_shape: None,
             is_active: false,
             trigger_flag,
-            marker_opacity: load_marker_opacity(),
+            marker_opacity: config.marker_opacity,
             editing_text_index: None,
             show_print_popup: false,
             cropped_preview: None,
             printers: Vec::new(),
-            selected_printer: print_settings.selected_printer,
-            print_copies: print_settings.copies,
-            print_landscape: print_settings.landscape,
-            print_grayscale: print_settings.grayscale,
-            print_paper_size: print_settings.paper,
-            print_fit_to_page: print_settings.fit,
-            show_tts_settings: false,
-            tts_rate: tts_settings.rate,
-            tts_volume: tts_settings.volume,
+            selected_printer: config.print_selected_printer.clone(),
+            print_copies: config.print_copies,
+            print_landscape: config.print_landscape,
+            print_grayscale: config.print_grayscale,
+            print_paper_size: config.print_paper.clone(),
+            print_fit_to_page: config.print_fit,
+            show_settings: false,
+            settings_state: crate::ui::SettingsWindowState::default(),
+            config,
+            hotkey_handle,
+            hotkey_rx,
             pending_action: None,
         }
     }
 
     fn activate(&mut self, ctx: &egui::Context) {
-        if let Ok(raw) = crate::capture::capture_primary_screen_raw() {
+        if let Ok(raw) = crate::capture::capture_primary_screen_raw(self.config.general_capture_cursor) {
             let width = raw.width;
             let height = raw.height;
             let color_image = crate::capture::raw_to_color_image(raw);
@@ -123,13 +134,15 @@ impl OverlayApp {
 
             self.texture = Some(ctx.load_texture("screenshot", color_image, Default::default()));
             
-            self.selection = None;
+            if !self.config.general_keep_selected_area {
+                self.selection = None;
+            }
             self.shapes.clear();
             self.active_shape = None;
             self.editing_text_index = None;
             self.pending_action = None;
             self.current_tool = Tool::Pen;
-            self.show_tts_settings = false;
+            self.show_settings = false;
             self.is_active = true;
             
             ctx.memory_mut(|m| m.close_popup());
@@ -152,29 +165,32 @@ impl OverlayApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     }
 
-    fn open_tts_settings(&mut self, ctx: &egui::Context) {
-        self.show_tts_settings = true;
+    fn open_settings(&mut self, ctx: &egui::Context) {
+        self.show_settings = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(420.0, 260.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(520.0, 360.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(120.0, 120.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title("TTS Settings".to_string()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title("Settings".to_string()));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
-    fn close_tts_settings(&mut self, ctx: &egui::Context) {
-        self.show_tts_settings = false;
+    fn close_settings(&mut self, ctx: &egui::Context) {
+        self.show_settings = false;
         if !self.is_active {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(0.0, 0.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Title("Lightshot Clone".to_string()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(-10000.0, -10000.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
+        ctx.request_repaint();
     }
 
     fn request_final_screenshot(&mut self, ctx: &egui::Context, action: PendingAction) {
@@ -205,22 +221,31 @@ impl OverlayApp {
         
         self.deactivate(ctx);
 
+        let auto_copy_link = self.config.general_auto_copy_link;
+        let auto_close_upload = self.config.general_auto_close_upload;
+        let copy_format = self.config.format;
+        let copy_quality = self.config.jpeg_quality;
         thread::spawn(move || {
             match action {
                 PendingAction::Copy => {
-                    let _ = crate::actions::copy_to_clipboard(&cropped);
-                    println!("SUCCESS: Copied to clipboard.");
+                    match crate::actions::copy_to_clipboard(
+                        &cropped,
+                        copy_format,
+                        copy_quality,
+                    ) {
+                        Ok(crate::actions::CopyResult::Image) => {}
+                        Ok(crate::actions::CopyResult::File) => {}
+                        Err(_) => {}
+                    }
                 }
                 PendingAction::Save => {
-                    let _ = crate::actions::save_to_file(&cropped);
-                    println!("SUCCESS: Saved to file.");
+                    if let Ok(saved) = crate::actions::save_to_file(&cropped) {
+                        let _ = saved;
+                    }
                 }
                 PendingAction::Upload => {
                     if let Ok(url) = crate::actions::prntsc_upload(&cropped) {
-                        let _ = webbrowser::open(&url);
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(url);
-                        }
+                        handle_upload_result(&url, auto_copy_link, auto_close_upload);
                     }
                 }
                 PendingAction::OCR => {
@@ -277,103 +302,15 @@ impl OverlayApp {
     }
 }
 
-fn marker_opacity_path() -> PathBuf {
-    std::env::temp_dir().join("lightshotv2_marker_opacity.txt")
-}
-
-fn load_marker_opacity() -> f32 {
-    let default_opacity = 0.4;
-    let path = marker_opacity_path();
-    let Ok(contents) = fs::read_to_string(path) else { return default_opacity };
-    let Ok(value) = contents.trim().parse::<f32>() else { return default_opacity };
-    value.clamp(0.1, 1.0)
-}
-
-fn save_marker_opacity(value: f32) {
-    let path = marker_opacity_path();
-    let _ = fs::write(path, format!("{:.3}", value));
-}
-
-fn color_settings_path() -> PathBuf {
-    std::env::temp_dir().join("lightshotv2_color.txt")
-}
-
-fn load_saved_color() -> Color32 {
-    let default_color = Color32::RED;
-    let Ok(contents) = fs::read_to_string(color_settings_path()) else { return default_color };
-    let mut parts = contents.trim().split(',');
-    let r = parts.next().and_then(|v| v.parse::<u8>().ok());
-    let g = parts.next().and_then(|v| v.parse::<u8>().ok());
-    let b = parts.next().and_then(|v| v.parse::<u8>().ok());
-    let a = parts.next().and_then(|v| v.parse::<u8>().ok());
-    if let (Some(r), Some(g), Some(b), Some(a)) = (r, g, b, a) {
-        Color32::from_rgba_unmultiplied(r, g, b, a)
-    } else {
-        default_color
+fn handle_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool) {
+    if !auto_close_upload {
+        let _ = webbrowser::open(url);
     }
-}
-
-fn save_color(color: Color32) {
-    let content = format!("{},{},{},{}", color.r(), color.g(), color.b(), color.a());
-    let _ = fs::write(color_settings_path(), content);
-}
-
-struct PrintSettings {
-    selected_printer: String,
-    copies: i32,
-    landscape: bool,
-    grayscale: bool,
-    fit: bool,
-    paper: String,
-}
-
-fn print_settings_path() -> PathBuf {
-    std::env::temp_dir().join("lightshotv2_print_settings.txt")
-}
-
-fn load_print_settings() -> PrintSettings {
-    let defaults = PrintSettings {
-        selected_printer: String::new(),
-        copies: 1,
-        landscape: false,
-        grayscale: false,
-        fit: true,
-        paper: "A4".to_string(),
-    };
-    let Ok(contents) = fs::read_to_string(print_settings_path()) else {
-        return defaults;
-    };
-    let mut settings = defaults;
-    for line in contents.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
-        match key.trim() {
-            "printer" => settings.selected_printer = value.trim().to_string(),
-            "copies" => {
-                if let Ok(v) = value.trim().parse::<i32>() {
-                    settings.copies = v.clamp(1, 99);
-                }
-            }
-            "landscape" => settings.landscape = value.trim() == "1",
-            "grayscale" => settings.grayscale = value.trim() == "1",
-            "fit" => settings.fit = value.trim() == "1",
-            "paper" => settings.paper = value.trim().to_string(),
-            _ => {}
+    if auto_copy_link {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(url);
         }
     }
-    settings
-}
-
-fn save_print_settings(settings: &PrintSettings) {
-    let content = format!(
-        "printer={}\ncopies={}\nlandscape={}\ngrayscale={}\nfit={}\npaper={}\n",
-        settings.selected_printer,
-        settings.copies.clamp(1, 99),
-        if settings.landscape { "1" } else { "0" },
-        if settings.grayscale { "1" } else { "0" },
-        if settings.fit { "1" } else { "0" },
-        settings.paper
-    );
-    let _ = fs::write(print_settings_path(), content);
 }
 
 impl eframe::App for OverlayApp {
@@ -382,15 +319,26 @@ impl eframe::App for OverlayApp {
             if event.id == MENU_ID_QUIT {
                 process::exit(0);
             }
-            if event.id == MENU_ID_TTS_SETTINGS {
-                self.open_tts_settings(ctx);
+            if event.id == MENU_ID_SETTINGS {
+                self.open_settings(ctx);
+            }
+        }
+
+        while let Ok(event) = self.hotkey_rx.try_recv() {
+            match event {
+                crate::hotkey::HotkeyEvent::InstantSave => {
+                    self.handle_instant_action(PendingAction::Save);
+                }
+                crate::hotkey::HotkeyEvent::InstantUpload => {
+                    self.handle_instant_action(PendingAction::Upload);
+                }
             }
         }
 
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.show_tts_settings {
-                self.close_tts_settings(ctx);
+            if self.show_settings {
+                self.close_settings(ctx);
             } else if self.is_active {
                 self.deactivate(ctx);
             }
@@ -414,13 +362,20 @@ impl eframe::App for OverlayApp {
             return;
         }
 
-        if !self.is_active && !self.show_tts_settings {
+        if !self.is_active && !self.show_settings {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
 
         if self.current_color != self.last_saved_color {
-            save_color(self.current_color);
+            {
+                let mut config = crate::config::cfg_mut();
+                config.color_r = self.current_color.r();
+                config.color_g = self.current_color.g();
+                config.color_b = self.current_color.b();
+                config.color_a = self.current_color.a();
+            }
+            crate::config::save();
             self.last_saved_color = self.current_color;
         }
 
@@ -571,7 +526,7 @@ impl eframe::App for OverlayApp {
                             1.0
                         };
                         let should_push = match shape.points.last() {
-                            Some(last) => (pointer_pos - *last).length() >= min_dist,
+                            Some(last) => pointer_pos.distance(*last) >= min_dist,
                             None => true,
                         };
                         if should_push {
@@ -591,7 +546,7 @@ impl eframe::App for OverlayApp {
                 if self.show_print_popup { self.show_print_window(ctx); }
             }
 
-            if self.show_tts_settings { self.show_tts_settings_window(ctx); }
+            if self.show_settings { self.show_settings_window(ctx); }
         });
         ctx.request_repaint();
     }
@@ -669,42 +624,69 @@ impl OverlayApp {
                     self.print_paper_size.clone(),
                 );
                 if before != after {
-                    save_print_settings(&PrintSettings {
-                        selected_printer: self.selected_printer.clone(),
-                        copies: self.print_copies,
-                        landscape: self.print_landscape,
-                        grayscale: self.print_grayscale,
-                        fit: self.print_fit_to_page,
-                        paper: self.print_paper_size.clone(),
-                    });
+                    {
+                        let mut config = crate::config::cfg_mut();
+                        config.print_selected_printer = self.selected_printer.clone();
+                        config.print_copies = self.print_copies;
+                        config.print_landscape = self.print_landscape;
+                        config.print_grayscale = self.print_grayscale;
+                        config.print_fit = self.print_fit_to_page;
+                        config.print_paper = self.print_paper_size.clone();
+                    }
+                    crate::config::save();
                 }
             });
         });
     }
 
-    fn show_tts_settings_window(&mut self, ctx: &egui::Context) {
-        let before = (self.tts_rate, self.tts_volume);
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading("TTS Settings");
-            ui.add_space(12.0);
-            ui.label("Speech rate");
-            ui.add(egui::Slider::new(&mut self.tts_rate, -10..=10));
-            ui.add_space(10.0);
-            ui.label("Volume");
-            ui.add(egui::Slider::new(&mut self.tts_volume, 0..=100));
-            ui.add_space(16.0);
+    fn show_settings_window(&mut self, ctx: &egui::Context) {
+        let before_config = self.config.clone();
+        crate::ui::show_settings_window(
+            ctx,
+            &mut self.settings_state,
+            &mut self.config,
+        );
+        egui::TopBottomPanel::bottom("settings_footer").show(ctx, |ui| {
+            ui.add_space(8.0);
             if ui.button("Close").clicked() {
-                self.close_tts_settings(ctx);
+                self.close_settings(ctx);
             }
         });
 
-        let after = (self.tts_rate, self.tts_volume);
-        if before != after {
-            crate::actions::save_tts_settings(&crate::actions::TtsSettings {
-                rate: self.tts_rate,
-                volume: self.tts_volume,
-            });
+        if before_config != self.config {
+            {
+                let mut config = crate::config::cfg_mut();
+                *config = self.config.clone();
+            }
+            crate::config::save();
+        }
+
+        let before_hotkey = (
+            before_config.hotkey_general_enabled,
+            before_config.hotkey_general_key,
+            before_config.hotkey_general_ctrl,
+            before_config.hotkey_general_shift,
+            before_config.hotkey_general_alt,
+            before_config.hotkey_general_win,
+            before_config.hotkey_instant_save_fullscreen,
+            before_config.hotkey_instant_upload_fullscreen,
+            before_config.hotkey_instant_save_combo.clone(),
+            before_config.hotkey_instant_upload_combo.clone(),
+        );
+        let after_hotkey = (
+            self.config.hotkey_general_enabled,
+            self.config.hotkey_general_key,
+            self.config.hotkey_general_ctrl,
+            self.config.hotkey_general_shift,
+            self.config.hotkey_general_alt,
+            self.config.hotkey_general_win,
+            self.config.hotkey_instant_save_fullscreen,
+            self.config.hotkey_instant_upload_fullscreen,
+            self.config.hotkey_instant_save_combo.clone(),
+            self.config.hotkey_instant_upload_combo.clone(),
+        );
+        if before_hotkey != after_hotkey {
+            self.hotkey_handle.update(crate::config::hotkey_config(&self.config));
         }
     }
 
@@ -789,7 +771,15 @@ impl OverlayApp {
                         .response
                         .on_hover_text("Change Color");
                     if color_response.changed() {
-                        save_color(self.current_color);
+                        self.config.color_r = self.current_color.r();
+                        self.config.color_g = self.current_color.g();
+                        self.config.color_b = self.current_color.b();
+                        self.config.color_a = self.current_color.a();
+                        {
+                            let mut config = crate::config::cfg_mut();
+                            *config = self.config.clone();
+                        }
+                        crate::config::save();
                     }
                     ui.add_space(2.0);
                     if ui.button(UNDO).on_hover_text("Undo (Ctrl+Z)").clicked() { self.shapes.pop(); }
@@ -827,7 +817,13 @@ impl OverlayApp {
                             .trailing_fill(true),
                     );
                     if response.changed() {
-                        save_marker_opacity(self.marker_opacity);
+                        self.marker_opacity = self.marker_opacity.clamp(0.1, 1.0);
+                        self.config.marker_opacity = self.marker_opacity;
+                        {
+                            let mut config = crate::config::cfg_mut();
+                            *config = self.config.clone();
+                        }
+                        crate::config::save();
                     }
                 });
             });

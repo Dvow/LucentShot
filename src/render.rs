@@ -2,7 +2,7 @@ use image::{DynamicImage, Rgba};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin, FillRule};
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale};
-use crate::overlay::{Shape, Tool};
+use crate::config::{Shape, Tool};
 
 lazy_static::lazy_static! {
     static ref FONT: Font<'static> = {
