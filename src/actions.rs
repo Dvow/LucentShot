@@ -1,11 +1,16 @@
 use arboard::{Clipboard, ImageData};
-use image::DynamicImage;
+use image::{DynamicImage, GrayImage, imageops::FilterType};
 use rfd::FileDialog;
 use anyhow::{Result, anyhow};
 use std::borrow::Cow;
 use std::thread;
 use std::time::Duration;
 use std::io::Cursor;
+use std::fs;
+use std::path::PathBuf;
+use imageproc::contrast::{otsu_level, threshold_mut};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use serde_json::json;
 
 pub fn copy_to_clipboard(img: &DynamicImage) -> Result<()> {
@@ -107,36 +112,206 @@ pub fn google_search(img: &DynamicImage) -> Result<()> {
 }
 
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
-    let mut buf = Vec::new();
-    img.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)?;
+    let tessdata_dir = resolve_tessdata_dir()?;
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()?;
+    let temp_dir = tempfile::tempdir()?;
+    let input_path = temp_dir.path().join("ocr_input.png");
+    let output_base = temp_dir.path().join("ocr_output");
+    let processed = preprocess_for_ocr(img);
+    processed.save(&input_path)?;
 
-    println!("Extracting text from image...");
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("apikey", "helloworld") 
-        .text("language", "eng")
-        .part("file", reqwest::blocking::multipart::Part::bytes(buf)
-            .file_name("screenshot.png")
-            .mime_str("image/png")?);
+    let mut cmd = tesseract_command()?;
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000);
+    }
+    cmd.env("TESSDATA_PREFIX", &tessdata_dir);
+    cmd.arg(&input_path)
+        .arg(&output_base)
+        .arg("-l")
+        .arg("eng")
+        .arg("--oem")
+        .arg("1")
+        .arg("--psm")
+        .arg("3")
+        .arg("--dpi")
+        .arg("300")
+        .arg("-c")
+        .arg("preserve_interword_spaces=1");
 
-    let resp = client.post("https://api.ocr.space/parse/image")
-        .multipart(form)
-        .send()?;
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(anyhow!(
+            "Tesseract failed.\nstdout: {}\nstderr: {}",
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
 
-    let json: serde_json::Value = resp.json()?;
-    
-    if let Some(results) = json["ParsedResults"].as_array() {
-        if let Some(first) = results.first() {
-            if let Some(text) = first["ParsedText"].as_str() {
-                return Ok(text.to_string());
-            }
+    let text_path = output_base.with_extension("txt");
+    let text = fs::read_to_string(text_path)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Err(anyhow!("No text detected"))
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn tesseract_command() -> Result<std::process::Command> {
+    if let Ok(custom) = std::env::var("TESSERACT_PATH") {
+        let path = PathBuf::from(custom);
+        if !path.exists() {
+            return Err(anyhow!("TESSERACT_PATH not found: {}", path.display()));
+        }
+        return Ok(std::process::Command::new(path));
+    }
+
+    let local_release = PathBuf::from("third_party/tesseract/build/bin/Release/tesseract.exe");
+    if local_release.exists() {
+        return Ok(std::process::Command::new(local_release));
+    }
+    let local_debug = PathBuf::from("third_party/tesseract/build/bin/Debug/tesseract.exe");
+    if local_debug.exists() {
+        return Ok(std::process::Command::new(local_debug));
+    }
+
+    Ok(std::process::Command::new("tesseract"))
+}
+
+fn resolve_tessdata_dir() -> Result<PathBuf> {
+    if let Ok(env_path) = std::env::var("TESSDATA_PREFIX") {
+        let path = PathBuf::from(env_path);
+        if path.join("eng.traineddata").exists() {
+            return Ok(path);
         }
     }
 
-    Err(anyhow!("Failed to extract text: {:?}", json))
+    let local_root = PathBuf::from("third_party/tessdata");
+    if local_root.join("eng.traineddata").exists() {
+        return Ok(local_root);
+    }
+
+    let local_in_tesseract = PathBuf::from("third_party/tesseract/tessdata");
+    if local_in_tesseract.join("eng.traineddata").exists() {
+        return Ok(local_in_tesseract);
+    }
+
+    Err(anyhow!(
+        "Missing eng.traineddata. Download tessdata and set TESSDATA_PREFIX to the folder. Example: https://github.com/tesseract-ocr/tessdata"
+    ))
+}
+
+fn preprocess_for_ocr(img: &DynamicImage) -> DynamicImage {
+    let gray = img.to_luma8();
+    let scaled = upscale_gray(&gray, 2);
+    let level = otsu_level(&scaled);
+    let mut binary = scaled.clone();
+    threshold_mut(&mut binary, level);
+    DynamicImage::ImageLuma8(binary)
+}
+
+fn upscale_gray(img: &GrayImage, factor: u32) -> GrayImage {
+    let width = img.width().saturating_mul(factor);
+    let height = img.height().saturating_mul(factor);
+    image::imageops::resize(img, width, height, FilterType::Lanczos3)
+}
+
+pub struct TtsSettings {
+    pub rate: i32,
+    pub volume: i32,
+}
+
+fn tts_settings_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("lightshotv2_tts_settings.txt")
+}
+
+pub fn load_tts_settings() -> TtsSettings {
+    let defaults = TtsSettings { rate: 0, volume: 100 };
+    let Ok(contents) = fs::read_to_string(tts_settings_path()) else { return defaults };
+    let mut settings = defaults;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else { continue };
+        match key.trim() {
+            "rate" => {
+                if let Ok(v) = value.trim().parse::<i32>() {
+                    settings.rate = v.clamp(-10, 10);
+                }
+            }
+            "volume" => {
+                if let Ok(v) = value.trim().parse::<i32>() {
+                    settings.volume = v.clamp(0, 100);
+                }
+            }
+            _ => {}
+        }
+    }
+    settings
+}
+
+pub fn save_tts_settings(settings: &TtsSettings) {
+    let content = format!(
+        "rate={}\nvolume={}\n",
+        settings.rate.clamp(-10, 10),
+        settings.volume.clamp(0, 100),
+    );
+    let _ = fs::write(tts_settings_path(), content);
+}
+
+pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
+    let text = match image_to_text(img) {
+        Ok(text) => text,
+        Err(err) => {
+            let log_path = std::env::temp_dir().join("lightshotv2_tts_error.txt");
+            let _ = fs::write(&log_path, format!("{}", err));
+            return Err(err);
+        }
+    };
+    let normalized = normalize_tts_text(&text);
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("No text detected"));
+    }
+    let path = std::env::temp_dir().join("lightshotv2_tts.txt");
+    fs::write(&path, trimmed)?;
+    let settings = load_tts_settings();
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = format!(
+            "Add-Type -AssemblyName System.Speech; \
+             $t = Get-Content -Raw -Path '{}'; \
+             $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+             $s.Rate = {}; \
+             $s.Volume = {}; \
+             $s.Speak($t);",
+            path.display().to_string().replace("'", "''")
+            ,settings.rate
+            ,settings.volume
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .creation_flags(0x08000000)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Speech Error: {}", err));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err(anyhow!("Image to speech is only supported on Windows"));
+    }
+
+    Ok(())
+}
+
+fn normalize_tts_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {

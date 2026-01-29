@@ -10,7 +10,7 @@ use eframe::egui;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tray_icon::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, MenuId},
     TrayIconBuilder, Icon,
 };
 
@@ -19,7 +19,19 @@ fn main() {
     let tray_icon = Icon::from_rgba(icon_data, 32, 32).expect("Failed to create tray icon");
 
     let tray_menu = Menu::new();
-    let quit_item = MenuItem::new("Exit Lightshot Clone", true, None);
+    let settings_item = MenuItem::with_id(
+        MenuId::new(overlay::MENU_ID_TTS_SETTINGS),
+        "TTS Settings",
+        true,
+        None,
+    );
+    let quit_item = MenuItem::with_id(
+        MenuId::new(overlay::MENU_ID_QUIT),
+        "Exit Lightshot Clone",
+        true,
+        None,
+    );
+    let _ = tray_menu.append(&settings_item);
     let _ = tray_menu.append(&quit_item);
 
     let tray = TrayIconBuilder::new()

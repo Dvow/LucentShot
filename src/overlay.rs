@@ -9,6 +9,9 @@ use std::fs;
 use std::path::PathBuf;
 use tray_icon::menu::MenuEvent;
 
+pub const MENU_ID_QUIT: &str = "menu_quit";
+pub const MENU_ID_TTS_SETTINGS: &str = "menu_tts_settings";
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tool { Pen, Line, Arrow, Rect, Marker, Text }
 
@@ -28,6 +31,7 @@ pub enum PendingAction {
     Save,
     Upload,
     OCR,
+    Speak,
     Print {
         printer: String,
         copies: i32,
@@ -64,6 +68,9 @@ pub struct OverlayApp {
     pub print_grayscale: bool,
     pub print_paper_size: String,
     pub print_fit_to_page: bool,
+    pub show_tts_settings: bool,
+    pub tts_rate: i32,
+    pub tts_volume: i32,
     pub pending_action: Option<PendingAction>,
 }
 
@@ -71,6 +78,7 @@ impl OverlayApp {
     pub fn new_background(trigger_flag: Arc<AtomicBool>) -> Self {
         let print_settings = load_print_settings();
         let saved_color = load_saved_color();
+        let tts_settings = crate::actions::load_tts_settings();
         Self {
             screenshot: None,
             texture: None,
@@ -96,6 +104,9 @@ impl OverlayApp {
             print_grayscale: print_settings.grayscale,
             print_paper_size: print_settings.paper,
             print_fit_to_page: print_settings.fit,
+            show_tts_settings: false,
+            tts_rate: tts_settings.rate,
+            tts_volume: tts_settings.volume,
             pending_action: None,
         }
     }
@@ -118,6 +129,7 @@ impl OverlayApp {
             self.editing_text_index = None;
             self.pending_action = None;
             self.current_tool = Tool::Pen;
+            self.show_tts_settings = false;
             self.is_active = true;
             
             ctx.memory_mut(|m| m.close_popup());
@@ -138,6 +150,31 @@ impl OverlayApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    }
+
+    fn open_tts_settings(&mut self, ctx: &egui::Context) {
+        self.show_tts_settings = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(420.0, 260.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title("TTS Settings".to_string()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn close_tts_settings(&mut self, ctx: &egui::Context) {
+        self.show_tts_settings = false;
+        if !self.is_active {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(0.0, 0.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title("Lightshot Clone".to_string()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
     }
 
     fn request_final_screenshot(&mut self, ctx: &egui::Context, action: PendingAction) {
@@ -192,6 +229,9 @@ impl OverlayApp {
                             let _ = clipboard.set_text(text);
                         }
                     }
+                }
+                PendingAction::Speak => {
+                    let _ = crate::actions::image_to_speech(&cropped);
                 }
                 PendingAction::Google => {
                     let _ = crate::actions::google_search(&cropped);
@@ -338,8 +378,23 @@ fn save_print_settings(settings: &PrintSettings) {
 
 impl eframe::App for OverlayApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if let Ok(_event) = MenuEvent::receiver().try_recv() {
-            process::exit(0);
+        if let Ok(event) = MenuEvent::receiver().try_recv() {
+            if event.id == MENU_ID_QUIT {
+                process::exit(0);
+            }
+            if event.id == MENU_ID_TTS_SETTINGS {
+                self.open_tts_settings(ctx);
+            }
+        }
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.show_tts_settings {
+                self.close_tts_settings(ctx);
+            } else if self.is_active {
+                self.deactivate(ctx);
+            }
+            return;
         }
 
         if self.trigger_flag.swap(false, Ordering::SeqCst) {
@@ -359,7 +414,7 @@ impl eframe::App for OverlayApp {
             return;
         }
 
-        if !self.is_active {
+        if !self.is_active && !self.show_tts_settings {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
@@ -415,113 +470,128 @@ impl eframe::App for OverlayApp {
 
         egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
             let screen_rect = ui.max_rect();
-            if let Some(texture) = &self.texture { ui.painter().image(texture.id(), screen_rect, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE); }
-
-            let response = ui.interact(screen_rect, Id::new("main_interact"), egui::Sense::drag());
-            let pointer_pos = ctx.pointer_interact_pos().unwrap_or(Pos2::ZERO).clamp(screen_rect.min, screen_rect.max);
-
-            if let Some(sel) = current_sel {
-                let dim = Color32::from_black_alpha(180);
-                ui.painter().rect_filled(Rect::from_min_max(screen_rect.min, egui::pos2(screen_rect.max.x, sel.min.y)), 0.0, dim);
-                ui.painter().rect_filled(Rect::from_min_max(egui::pos2(screen_rect.min.x, sel.max.y), screen_rect.max), 0.0, dim);
-                ui.painter().rect_filled(Rect::from_min_max(egui::pos2(screen_rect.min.x, sel.min.y), egui::pos2(sel.min.x, sel.max.y)), 0.0, dim);
-                ui.painter().rect_filled(Rect::from_min_max(egui::pos2(sel.max.x, sel.min.y), egui::pos2(screen_rect.max.x, sel.max.y)), 0.0, dim);
-                
-                if self.pending_action.is_none() {
-                    ui.painter().rect_stroke(sel, 0.0, Stroke::new(1.0, Color32::WHITE));
-                    let size_text = format!("{} x {}", sel.width().round(), sel.height().round());
-                    ui.painter().text(sel.left_top() - egui::vec2(0.0, 20.0), egui::Align2::LEFT_TOP, size_text, egui::FontId::proportional(14.0), Color32::WHITE);
-                    for (i, node) in self.get_nodes(sel).iter().enumerate() {
-                        let node_color = if self.resizing_node == Some(i) { Color32::LIGHT_BLUE } else { Color32::WHITE };
-                        ui.painter().rect_filled(*node, 0.0, node_color);
-                    }
+            if self.is_active {
+                if let Some(texture) = &self.texture {
+                    ui.painter().image(
+                        texture.id(),
+                        screen_rect,
+                        Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
                 }
-            } else {
-                ui.painter().rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180)); 
-                if self.pending_action.is_none() {
-                    let text = "Select an area";
-                    let font_id = egui::FontId::proportional(16.0);
-                    let text_color = Color32::WHITE;
-                    let offset = egui::vec2(15.0, 15.0);
-                    ui.painter().text(pointer_pos + offset, egui::Align2::LEFT_TOP, text, font_id, text_color);
-                }
-            }
 
-            for (idx, shape) in self.shapes.iter().enumerate() { 
-                if Some(idx) != self.editing_text_index { self.render_shape(ui, shape); }
-            }
-            if let Some(shape) = &self.active_shape { self.render_shape(ui, shape); }
+                let response = ui.interact(screen_rect, Id::new("main_interact"), egui::Sense::drag());
+                let pointer_pos = ctx.pointer_interact_pos().unwrap_or(Pos2::ZERO).clamp(screen_rect.min, screen_rect.max);
 
-            if let Some(idx) = self.editing_text_index {
-                if let Some(shape) = self.shapes.get_mut(idx) {
-                    if let Some(pos) = shape.points.first() {
-                        let text_color = shape.color;
-                        egui::Area::new(Id::new(("edit_text", idx))).fixed_pos(*pos).show(ctx, |ui| {
-                            let re = ui.add(egui::TextEdit::singleline(&mut shape.text).font(egui::FontId::proportional(20.0)).text_color(text_color).frame(false));
-                            re.request_focus();
-                            if re.lost_focus() || ctx.input(|i| i.key_pressed(Key::Enter)) { self.editing_text_index = None; }
-                        });
-                    }
-                }
-            }
-
-            if let Some(sel) = current_sel {
-                if !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup && self.pending_action.is_none() { self.show_toolbars(ctx, sel); }
-            }
-
-            if !self.show_print_popup && self.pending_action.is_none() && response.drag_started() && !ctx.is_pointer_over_area() {
                 if let Some(sel) = current_sel {
-                    let nodes = self.get_nodes(sel);
-                    if let Some(idx) = nodes.iter().position(|n| n.contains(pointer_pos)) { self.resizing_node = Some(idx); }
-                    else if sel.contains(pointer_pos) {
-                        if self.current_tool == Tool::Text {
-                            self.shapes.push(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: 2.0, tool: Tool::Text, text: String::new(), is_marker: false, opacity: 1.0 });
-                            self.editing_text_index = Some(self.shapes.len() - 1);
+                    let dim = Color32::from_black_alpha(180);
+                    ui.painter().rect_filled(Rect::from_min_max(screen_rect.min, egui::pos2(screen_rect.max.x, sel.min.y)), 0.0, dim);
+                    ui.painter().rect_filled(Rect::from_min_max(egui::pos2(screen_rect.min.x, sel.max.y), screen_rect.max), 0.0, dim);
+                    ui.painter().rect_filled(Rect::from_min_max(egui::pos2(screen_rect.min.x, sel.min.y), egui::pos2(sel.min.x, sel.max.y)), 0.0, dim);
+                    ui.painter().rect_filled(Rect::from_min_max(egui::pos2(sel.max.x, sel.min.y), egui::pos2(screen_rect.max.x, sel.max.y)), 0.0, dim);
+                    
+                    if self.pending_action.is_none() {
+                        ui.painter().rect_stroke(sel, 0.0, Stroke::new(1.0, Color32::WHITE));
+                        let size_text = format!("{} x {}", sel.width().round(), sel.height().round());
+                        ui.painter().text(sel.left_top() - egui::vec2(0.0, 20.0), egui::Align2::LEFT_TOP, size_text, egui::FontId::proportional(14.0), Color32::WHITE);
+                        for (i, node) in self.get_nodes(sel).iter().enumerate() {
+                            let node_color = if self.resizing_node == Some(i) { Color32::LIGHT_BLUE } else { Color32::WHITE };
+                            ui.painter().rect_filled(*node, 0.0, node_color);
+                        }
+                    }
+                } else {
+                    ui.painter().rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180)); 
+                    if self.pending_action.is_none() {
+                        let text = "Select an area";
+                        let font_id = egui::FontId::proportional(16.0);
+                        let text_color = Color32::WHITE;
+                        let offset = egui::vec2(15.0, 15.0);
+                        ui.painter().text(pointer_pos + offset, egui::Align2::LEFT_TOP, text, font_id, text_color);
+                    }
+                }
+
+                for (idx, shape) in self.shapes.iter().enumerate() { 
+                    if Some(idx) != self.editing_text_index { self.render_shape(ui, shape); }
+                }
+                if let Some(shape) = &self.active_shape { self.render_shape(ui, shape); }
+
+                if let Some(idx) = self.editing_text_index {
+                    if let Some(shape) = self.shapes.get_mut(idx) {
+                        if let Some(pos) = shape.points.first() {
+                            let text_color = shape.color;
+                            egui::Area::new(Id::new(("edit_text", idx))).fixed_pos(*pos).show(ctx, |ui| {
+                                let re = ui.add(egui::TextEdit::singleline(&mut shape.text).font(egui::FontId::proportional(20.0)).text_color(text_color).frame(false));
+                                re.request_focus();
+                                if re.lost_focus() || ctx.input(|i| i.key_pressed(Key::Enter)) { self.editing_text_index = None; }
+                            });
+                        }
+                    }
+                }
+
+                if let Some(sel) = current_sel {
+                    if !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup && self.pending_action.is_none() { self.show_toolbars(ctx, sel); }
+                }
+
+                if !self.show_print_popup
+                    && self.pending_action.is_none()
+                    && response.drag_started()
+                    && !ctx.is_pointer_over_area()
+                {
+                    if let Some(sel) = current_sel {
+                        let nodes = self.get_nodes(sel);
+                        if let Some(idx) = nodes.iter().position(|n| n.contains(pointer_pos)) { self.resizing_node = Some(idx); }
+                        else if sel.contains(pointer_pos) {
+                            if self.current_tool == Tool::Text {
+                                self.shapes.push(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: 2.0, tool: Tool::Text, text: String::new(), is_marker: false, opacity: 1.0 });
+                                self.editing_text_index = Some(self.shapes.len() - 1);
+                            } else {
+                                self.active_shape = Some(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: if self.current_tool == Tool::Marker { 15.0 } else { 2.5 }, tool: self.current_tool, text: String::new(), is_marker: self.current_tool == Tool::Marker, opacity: if self.current_tool == Tool::Marker { self.marker_opacity } else { 1.0 } });
+                            }
+                        }
+                        else { self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); self.is_selecting = true; self.start_pos = Some(pointer_pos); }
+                    } else { self.is_selecting = true; self.start_pos = Some(pointer_pos); self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); }
+                }
+
+                if !self.show_print_popup && self.pending_action.is_none() && response.dragged() {
+                    if self.is_selecting { if let Some(start) = self.start_pos { self.selection = Some(Rect::from_two_pos(start, pointer_pos)); } }
+                    else if let Some(idx) = self.resizing_node {
+                        if let Some(mut sel) = self.selection {
+                            match idx { 
+                                0 => sel.min = pointer_pos, 1 => { sel.max.x = pointer_pos.x; sel.min.y = pointer_pos.y; }, 
+                                2 => sel.max = pointer_pos, 3 => { sel.min.x = pointer_pos.x; sel.max.y = pointer_pos.y; },
+                                4 => sel.min.y = pointer_pos.y, 5 => sel.max.x = pointer_pos.x, 
+                                6 => sel.max.y = pointer_pos.y, 7 => sel.min.x = pointer_pos.x, _ => {} 
+                            }
+                            self.selection = Some(sel);
+                        }
+                    } else if let Some(shape) = &mut self.active_shape {
+                        let min_dist = if shape.is_marker {
+                            (shape.stroke_width * 0.35).max(2.0)
                         } else {
-                            self.active_shape = Some(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: if self.current_tool == Tool::Marker { 15.0 } else { 2.5 }, tool: self.current_tool, text: String::new(), is_marker: self.current_tool == Tool::Marker, opacity: if self.current_tool == Tool::Marker { self.marker_opacity } else { 1.0 } });
+                            1.0
+                        };
+                        let should_push = match shape.points.last() {
+                            Some(last) => (pointer_pos - *last).length() >= min_dist,
+                            None => true,
+                        };
+                        if should_push {
+                            shape.points.push(pointer_pos);
                         }
                     }
-                    else { self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); self.is_selecting = true; self.start_pos = Some(pointer_pos); }
-                } else { self.is_selecting = true; self.start_pos = Some(pointer_pos); self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); }
-            }
+                }
 
-            if !self.show_print_popup && self.pending_action.is_none() && response.dragged() {
-                if self.is_selecting { if let Some(start) = self.start_pos { self.selection = Some(Rect::from_two_pos(start, pointer_pos)); } }
-                else if let Some(idx) = self.resizing_node {
-                    if let Some(mut sel) = self.selection {
-                        match idx { 
-                            0 => sel.min = pointer_pos, 1 => { sel.max.x = pointer_pos.x; sel.min.y = pointer_pos.y; }, 
-                            2 => sel.max = pointer_pos, 3 => { sel.min.x = pointer_pos.x; sel.max.y = pointer_pos.y; },
-                            4 => sel.min.y = pointer_pos.y, 5 => sel.max.x = pointer_pos.x, 
-                            6 => sel.max.y = pointer_pos.y, 7 => sel.min.x = pointer_pos.x, _ => {} 
-                        }
-                        self.selection = Some(sel);
-                    }
-                } else if let Some(shape) = &mut self.active_shape {
-                    let min_dist = if shape.is_marker {
-                        (shape.stroke_width * 0.35).max(2.0)
-                    } else {
-                        1.0
-                    };
-                    let should_push = match shape.points.last() {
-                        Some(last) => (pointer_pos - *last).length() >= min_dist,
-                        None => true,
-                    };
-                    if should_push {
-                        shape.points.push(pointer_pos);
+                if response.drag_stopped() {
+                    self.is_selecting = false; self.resizing_node = None;
+                    if let Some(shape) = self.active_shape.take() { self.shapes.push(shape); }
+                    if let Some(sel) = self.selection {
+                        self.selection = Some(Rect::from_two_pos(sel.min, sel.max));
                     }
                 }
+
+                if self.show_print_popup { self.show_print_window(ctx); }
             }
 
-            if response.drag_stopped() {
-                self.is_selecting = false; self.resizing_node = None;
-                if let Some(shape) = self.active_shape.take() { self.shapes.push(shape); }
-                if let Some(sel) = self.selection {
-                    self.selection = Some(Rect::from_two_pos(sel.min, sel.max));
-                }
-            }
-
-            if self.show_print_popup { self.show_print_window(ctx); }
+            if self.show_tts_settings { self.show_tts_settings_window(ctx); }
         });
         ctx.request_repaint();
     }
@@ -610,6 +680,32 @@ impl OverlayApp {
                 }
             });
         });
+    }
+
+    fn show_tts_settings_window(&mut self, ctx: &egui::Context) {
+        let before = (self.tts_rate, self.tts_volume);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("TTS Settings");
+            ui.add_space(12.0);
+            ui.label("Speech rate");
+            ui.add(egui::Slider::new(&mut self.tts_rate, -10..=10));
+            ui.add_space(10.0);
+            ui.label("Volume");
+            ui.add(egui::Slider::new(&mut self.tts_volume, 0..=100));
+            ui.add_space(16.0);
+            if ui.button("Close").clicked() {
+                self.close_tts_settings(ctx);
+            }
+        });
+
+        let after = (self.tts_rate, self.tts_volume);
+        if before != after {
+            crate::actions::save_tts_settings(&crate::actions::TtsSettings {
+                rate: self.tts_rate,
+                volume: self.tts_volume,
+            });
+        }
     }
 
     fn render_shape(&self, ui: &mut egui::Ui, shape: &Shape) {
@@ -710,6 +806,7 @@ impl OverlayApp {
                     if ui.button(CLOUD).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.request_final_screenshot(ctx, PendingAction::Upload); }
                     if ui.button(GOOGLE).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.request_final_screenshot(ctx, PendingAction::Google); }
                     if ui.button(ALIGN_LEFT).on_hover_text("Image to Text (OCR)").clicked() { self.request_final_screenshot(ctx, PendingAction::OCR); }
+                    if ui.button("TTS").on_hover_text("Image to Speech").clicked() { self.request_final_screenshot(ctx, PendingAction::Speak); }
                     if ui.button(PRINT).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
                     if ui.button(SAVE).on_hover_text("Save (Ctrl+S)").clicked() { self.request_final_screenshot(ctx, PendingAction::Save); }
                     if ui.button(COPY).on_hover_text("Copy (Ctrl+C)").clicked() { self.request_final_screenshot(ctx, PendingAction::Copy); }
