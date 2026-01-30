@@ -68,6 +68,17 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
                 mac_cmd: false,
             },
         });
+    let copy_focused_window_binding = crate::hotkey::parse_hotkey_combo(&config.hotkey_copy_focused_window_combo)
+        .unwrap_or(HotkeyBinding {
+            key: Some(windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as u32),
+            modifiers: egui::Modifiers {
+                ctrl: false,
+                shift: false,
+                alt: true,
+                command: false,
+                mac_cmd: false,
+            },
+        });
     HotkeyConfig {
         general_enabled: config.hotkey_general_enabled,
         general_binding,
@@ -75,6 +86,8 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
         instant_save_binding,
         instant_upload_enabled: config.hotkey_instant_upload_fullscreen,
         instant_upload_binding,
+        copy_focused_window_enabled: config.hotkey_copy_focused_window,
+        copy_focused_window_binding,
     }
 }
 

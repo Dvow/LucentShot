@@ -76,6 +76,24 @@ impl OverlayApp {
             }
         });
     }
+
+    fn handle_copy_focused_window(&self) {
+        let copy_format = self.config.format;
+        let copy_quality = self.config.jpeg_quality;
+        thread::spawn(move || {
+            let Ok(raw) = crate::capture::capture_focused_window_raw() else { return };
+            let color_image = crate::capture::raw_to_color_image(raw);
+            let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                color_image.width() as u32,
+                color_image.height() as u32,
+                color_image.as_raw().to_vec(),
+            )
+            .unwrap();
+            let img = image::DynamicImage::ImageRgba8(img_buffer);
+            let _ = crate::actions::copy_to_clipboard(&img, copy_format, copy_quality);
+        });
+    }
+
     pub fn new_background(
         trigger_flag: Arc<AtomicBool>,
         hotkey_handle: crate::hotkey::HotkeyHandle,
@@ -312,6 +330,9 @@ impl eframe::App for OverlayApp {
                 }
                 crate::hotkey::HotkeyEvent::InstantUpload => {
                     self.handle_instant_action(PendingAction::Upload);
+                }
+                crate::hotkey::HotkeyEvent::CopyFocusedWindow => {
+                    self.handle_copy_focused_window();
                 }
             }
         }
@@ -633,8 +654,10 @@ impl OverlayApp {
             before_config.hotkey_general_win,
             before_config.hotkey_instant_save_fullscreen,
             before_config.hotkey_instant_upload_fullscreen,
+            before_config.hotkey_copy_focused_window,
             before_config.hotkey_instant_save_combo.clone(),
             before_config.hotkey_instant_upload_combo.clone(),
+            before_config.hotkey_copy_focused_window_combo.clone(),
         );
         let after_hotkey = (
             self.config.hotkey_general_enabled,
@@ -645,8 +668,10 @@ impl OverlayApp {
             self.config.hotkey_general_win,
             self.config.hotkey_instant_save_fullscreen,
             self.config.hotkey_instant_upload_fullscreen,
+            self.config.hotkey_copy_focused_window,
             self.config.hotkey_instant_save_combo.clone(),
             self.config.hotkey_instant_upload_combo.clone(),
+            self.config.hotkey_copy_focused_window_combo.clone(),
         );
         if before_hotkey != after_hotkey {
             self.hotkey_handle.update(crate::config::hotkey_config(&self.config));

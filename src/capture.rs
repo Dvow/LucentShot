@@ -87,6 +87,100 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn capture_focused_window_raw() -> Result<RawCapture> {
+    use windows::Win32::Graphics::Gdi::{
+        GetDC, ReleaseDC, CreateCompatibleDC, CreateCompatibleBitmap,
+        SelectObject, BitBlt, DeleteDC, DeleteObject, GetDIBits,
+        SRCCOPY, DIB_RGB_COLORS, BITMAPINFOHEADER, BI_RGB,
+    };
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect};
+    use windows::Win32::Foundation::RECT;
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0 == 0 {
+            return Err(anyhow::anyhow!("No foreground window"));
+        }
+        let mut rect = RECT::default();
+        // Prefer DWM extended frame bounds (excludes shadow) for consistent edges
+        let use_dwm = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut rect as *mut _ as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .is_ok();
+        if !use_dwm {
+            GetWindowRect(hwnd, &mut rect)?;
+            // Fallback: inset by 2 pixels to reduce shadow/background bleed
+            rect.left += 2;
+            rect.top += 2;
+            rect.right = (rect.right - 2).max(rect.left);
+            rect.bottom = (rect.bottom - 2).max(rect.top);
+        }
+// Trim 1 pixel on each side around the entire edge
+        let left = rect.left + 1;
+        let top = rect.top + 1;
+        let right = (rect.right - 1).max(left);
+        let bottom = (rect.bottom - 1).max(top);
+        let width = (right - left).max(1);
+        let height = (bottom - top).max(1);
+        if width <= 0 || height <= 0 {
+            return Err(anyhow::anyhow!("Window has no area"));
+        }
+        let h_dc_screen = GetDC(None);
+        let h_dc_mem = CreateCompatibleDC(h_dc_screen);
+        let h_bitmap = CreateCompatibleBitmap(h_dc_screen, width, height);
+        let h_old_obj = SelectObject(h_dc_mem, h_bitmap);
+        BitBlt(
+            h_dc_mem,
+            0,
+            0,
+            width,
+            height,
+            h_dc_screen,
+            left,
+            top,
+            SRCCOPY,
+        )?;
+        let mut bmi = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0 as u32,
+            ..Default::default()
+        };
+        let mut buffer: Vec<u8> = vec![0; (width * height * 4) as usize];
+        GetDIBits(
+            h_dc_mem,
+            h_bitmap,
+            0,
+            height as u32,
+            Some(buffer.as_mut_ptr() as *mut _),
+            (&mut bmi as *mut BITMAPINFOHEADER) as *mut _,
+            DIB_RGB_COLORS,
+        );
+        let _ = SelectObject(h_dc_mem, h_old_obj);
+        let _ = DeleteObject(h_bitmap);
+        let _ = DeleteDC(h_dc_mem);
+        ReleaseDC(None, h_dc_screen);
+        Ok(RawCapture {
+            width,
+            height,
+            pixels: buffer,
+        })
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn capture_focused_window_raw() -> Result<RawCapture> {
+    Err(anyhow::anyhow!("Focused window capture is Windows-only"))
+}
+
 pub fn raw_to_color_image(raw: RawCapture) -> ColorImage {
     // Parallel optimized swap: BGRA to RGBA
     let mut pixels = raw.pixels;

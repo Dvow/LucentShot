@@ -182,6 +182,17 @@ fn render_hotkeys(
                     .desired_width(160.0),
             );
             ui.end_row();
+
+            ui.checkbox(
+                &mut config.hotkey_copy_focused_window,
+                "Copy focused window (e.g. Alt + Prnt Scrn)",
+            );
+            ui.add_enabled(
+                config.hotkey_copy_focused_window,
+                egui::TextEdit::singleline(&mut config.hotkey_copy_focused_window_combo)
+                    .desired_width(160.0),
+            );
+            ui.end_row();
         });
 }
 

@@ -34,6 +34,8 @@ pub struct HotkeyConfig {
     pub instant_save_binding: HotkeyBinding,
     pub instant_upload_enabled: bool,
     pub instant_upload_binding: HotkeyBinding,
+    pub copy_focused_window_enabled: bool,
+    pub copy_focused_window_binding: HotkeyBinding,
 }
 
 impl Default for HotkeyConfig {
@@ -45,6 +47,17 @@ impl Default for HotkeyConfig {
             instant_save_binding: HotkeyBinding::default(),
             instant_upload_enabled: false,
             instant_upload_binding: HotkeyBinding::default(),
+            copy_focused_window_enabled: true,
+            copy_focused_window_binding: HotkeyBinding {
+                key: Some(vk::VK_SNAPSHOT as u32),
+                modifiers: egui::Modifiers {
+                    ctrl: false,
+                    shift: false,
+                    alt: true,
+                    command: false,
+                    mac_cmd: false,
+                },
+            },
         }
     }
 }
@@ -53,6 +66,7 @@ impl Default for HotkeyConfig {
 pub enum HotkeyEvent {
     InstantSave,
     InstantUpload,
+    CopyFocusedWindow,
 }
 
 #[derive(Clone)]
@@ -103,6 +117,9 @@ pub fn start_low_level_hotkey_loop(
                         3 => {
                             let _ = event_tx.send(HotkeyEvent::InstantUpload);
                         }
+                        4 => {
+                            let _ = event_tx.send(HotkeyEvent::CopyFocusedWindow);
+                        }
                         _ => {}
                     }
                 } else if msg.message == WM_APP + 1 {
@@ -122,6 +139,7 @@ fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>) {
         let _ = UnregisterHotKey(None, 1);
         let _ = UnregisterHotKey(None, 2);
         let _ = UnregisterHotKey(None, 3);
+        let _ = UnregisterHotKey(None, 4);
 
         if cfg.general_enabled {
             register_hotkey(1, cfg.general_binding);
@@ -131,6 +149,9 @@ fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>) {
         }
         if cfg.instant_upload_enabled {
             register_hotkey(3, cfg.instant_upload_binding);
+        }
+        if cfg.copy_focused_window_enabled {
+            register_hotkey(4, cfg.copy_focused_window_binding);
         }
     }
 }
