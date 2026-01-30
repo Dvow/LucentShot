@@ -123,6 +123,9 @@ impl OverlayApp {
     }
 
     fn activate(&mut self, ctx: &egui::Context) {
+        if self.show_settings {
+            self.close_settings(ctx);
+        }
         if let Ok(raw) = crate::capture::capture_primary_screen_raw(self.config.general_capture_cursor) {
             let width = raw.width;
             let height = raw.height;
@@ -162,9 +165,13 @@ impl OverlayApp {
         self.screenshot = None;
         self.cropped_preview = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(0.0, 0.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(-10000.0, -10000.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title("Lightshot Clone".to_string()));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     }
 
@@ -196,34 +203,15 @@ impl OverlayApp {
         ctx.request_repaint();
     }
 
-    fn request_final_screenshot(&mut self, ctx: &egui::Context, action: PendingAction) {
-        self.pending_action = Some(action);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
-    }
-
-    fn process_screenshot(&mut self, ctx: &egui::Context, color_image: egui::ColorImage) {
-        let action = if let Some(a) = self.pending_action.take() { a } else { return };
-        let sel = if let Some(s) = self.selection { Rect::from_two_pos(s.min, s.max) } else { return };
-        
+    fn execute_action_immediate(&mut self, ctx: &egui::Context, action: PendingAction) {
+        let Some(screenshot) = self.screenshot.as_ref().map(Arc::clone) else { return };
+        let Some(sel) = self.selection else { return };
+        let shapes = self.shapes.clone();
         let ppp = ctx.pixels_per_point();
-        let x = (sel.min.x * ppp).round() as u32;
-        let y = (sel.min.y * ppp).round() as u32;
-        let w = (sel.width() * ppp).round() as u32;
-        let h = (sel.height() * ppp).round() as u32;
 
-        let pixels = color_image.as_raw();
-        let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(color_image.width() as u32, color_image.height() as u32, pixels.to_vec()).unwrap();
-        let dynamic_img = image::DynamicImage::ImageRgba8(img_buffer);
-        
-        let crop_x = x.min(dynamic_img.width().saturating_sub(1));
-        let crop_y = y.min(dynamic_img.height().saturating_sub(1));
-        let crop_w = w.min(dynamic_img.width().saturating_sub(crop_x)).max(1);
-        let crop_h = h.min(dynamic_img.height().saturating_sub(crop_y)).max(1);
-        
-        let cropped = dynamic_img.crop_imm(crop_x, crop_y, crop_w, crop_h);
-        
         self.deactivate(ctx);
 
+        let cropped = crate::render::render_and_crop(&screenshot, &shapes, sel, ppp);
         let auto_copy_link = self.config.general_auto_copy_link;
         let auto_close_upload = self.config.general_auto_close_upload;
         let copy_format = self.config.format;
@@ -231,20 +219,10 @@ impl OverlayApp {
         thread::spawn(move || {
             match action {
                 PendingAction::Copy => {
-                    match crate::actions::copy_to_clipboard(
-                        &cropped,
-                        copy_format,
-                        copy_quality,
-                    ) {
-                        Ok(crate::actions::CopyResult::Image) => {}
-                        Ok(crate::actions::CopyResult::File) => {}
-                        Err(_) => {}
-                    }
+                    let _ = crate::actions::copy_to_clipboard(&cropped, copy_format, copy_quality);
                 }
                 PendingAction::Save => {
-                    if let Ok(saved) = crate::actions::save_to_file(&cropped) {
-                        let _ = saved;
-                    }
+                    let _ = crate::actions::save_to_file(&cropped);
                 }
                 PendingAction::Upload => {
                     if let Ok(url) = crate::actions::prntsc_upload(&cropped) {
@@ -352,19 +330,6 @@ impl eframe::App for OverlayApp {
             self.activate(ctx);
         }
 
-        let mut received_screenshot = None;
-        ctx.input(|i| {
-            for event in &i.raw.events {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    received_screenshot = Some((**image).clone());
-                }
-            }
-        });
-        if let Some(img) = received_screenshot {
-            self.process_screenshot(ctx, img);
-            return;
-        }
-
         if !self.is_active && !self.show_settings {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
             return;
@@ -419,10 +384,10 @@ impl eframe::App for OverlayApp {
         let current_sel = self.selection.map(|s| Rect::from_two_pos(s.min, s.max));
 
         if let Some(sel) = current_sel {
-            if trigger_copy { self.request_final_screenshot(ctx, PendingAction::Copy); return; }
-            if trigger_save { self.request_final_screenshot(ctx, PendingAction::Save); return; }
-            if trigger_upload { self.request_final_screenshot(ctx, PendingAction::Upload); return; }
-            if trigger_google { self.request_final_screenshot(ctx, PendingAction::Google); return; }
+            if trigger_copy { self.execute_action_immediate(ctx, PendingAction::Copy); return; }
+            if trigger_save { self.execute_action_immediate(ctx, PendingAction::Save); return; }
+            if trigger_upload { self.execute_action_immediate(ctx, PendingAction::Upload); return; }
+            if trigger_google { self.execute_action_immediate(ctx, PendingAction::Google); return; }
             if trigger_print { self.prepare_print_preview(ctx, sel); return; }
         }
 
@@ -448,24 +413,20 @@ impl eframe::App for OverlayApp {
                     ui.painter().rect_filled(Rect::from_min_max(egui::pos2(screen_rect.min.x, sel.min.y), egui::pos2(sel.min.x, sel.max.y)), 0.0, dim);
                     ui.painter().rect_filled(Rect::from_min_max(egui::pos2(sel.max.x, sel.min.y), egui::pos2(screen_rect.max.x, sel.max.y)), 0.0, dim);
                     
-                    if self.pending_action.is_none() {
-                        ui.painter().rect_stroke(sel, 0.0, Stroke::new(1.0, Color32::WHITE));
-                        let size_text = format!("{} x {}", sel.width().round(), sel.height().round());
-                        ui.painter().text(sel.left_top() - egui::vec2(0.0, 20.0), egui::Align2::LEFT_TOP, size_text, egui::FontId::proportional(14.0), Color32::WHITE);
-                        for (i, node) in self.get_nodes(sel).iter().enumerate() {
-                            let node_color = if self.resizing_node == Some(i) { Color32::LIGHT_BLUE } else { Color32::WHITE };
-                            ui.painter().rect_filled(*node, 0.0, node_color);
-                        }
+                    ui.painter().rect_stroke(sel, 0.0, Stroke::new(1.0, Color32::WHITE));
+                    let size_text = format!("{} x {}", sel.width().round(), sel.height().round());
+                    ui.painter().text(sel.left_top() - egui::vec2(0.0, 20.0), egui::Align2::LEFT_TOP, size_text, egui::FontId::proportional(14.0), Color32::WHITE);
+                    for (i, node) in self.get_nodes(sel).iter().enumerate() {
+                        let node_color = if self.resizing_node == Some(i) { Color32::LIGHT_BLUE } else { Color32::WHITE };
+                        ui.painter().rect_filled(*node, 0.0, node_color);
                     }
                 } else {
                     ui.painter().rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180)); 
-                    if self.pending_action.is_none() {
-                        let text = "Select an area";
-                        let font_id = egui::FontId::proportional(16.0);
-                        let text_color = Color32::WHITE;
-                        let offset = egui::vec2(15.0, 15.0);
-                        ui.painter().text(pointer_pos + offset, egui::Align2::LEFT_TOP, text, font_id, text_color);
-                    }
+                    let text = "Select an area";
+                    let font_id = egui::FontId::proportional(16.0);
+                    let text_color = Color32::WHITE;
+                    let offset = egui::vec2(15.0, 15.0);
+                    ui.painter().text(pointer_pos + offset, egui::Align2::LEFT_TOP, text, font_id, text_color);
                 }
 
                 for (idx, shape) in self.shapes.iter().enumerate() { 
@@ -487,11 +448,10 @@ impl eframe::App for OverlayApp {
                 }
 
                 if let Some(sel) = current_sel {
-                    if !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup && self.pending_action.is_none() { self.show_toolbars(ctx, sel); }
+                    if !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup { self.show_toolbars(ctx, sel); }
                 }
 
                 if !self.show_print_popup
-                    && self.pending_action.is_none()
                     && response.drag_started()
                     && !ctx.is_pointer_over_area()
                 {
@@ -510,7 +470,7 @@ impl eframe::App for OverlayApp {
                     } else { self.is_selecting = true; self.start_pos = Some(pointer_pos); self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); }
                 }
 
-                if !self.show_print_popup && self.pending_action.is_none() && response.dragged() {
+                if !self.show_print_popup && response.dragged() {
                     if self.is_selecting { if let Some(start) = self.start_pos { self.selection = Some(Rect::from_two_pos(start, pointer_pos)); } }
                     else if let Some(idx) = self.resizing_node {
                         if let Some(mut sel) = self.selection {
@@ -607,7 +567,7 @@ impl OverlayApp {
                 ui.horizontal(|ui| {
                     let btn_width = (ui.available_width() - 10.0) / 2.0;
                     if ui.add_sized([btn_width, 30.0], egui::Button::new("Print")).clicked() {
-                        self.request_final_screenshot(ctx, PendingAction::Print {
+                        self.execute_action_immediate(ctx, PendingAction::Print {
                             printer: self.selected_printer.clone(),
                             copies: self.print_copies,
                             landscape: self.print_landscape,
@@ -796,13 +756,13 @@ impl OverlayApp {
             .frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button(CLOUD).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.request_final_screenshot(ctx, PendingAction::Upload); }
-                    if ui.button(GOOGLE).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.request_final_screenshot(ctx, PendingAction::Google); }
-                    if ui.button(ALIGN_LEFT).on_hover_text("Image to Text (OCR)").clicked() { self.request_final_screenshot(ctx, PendingAction::OCR); }
-                    if ui.button("TTS").on_hover_text("Image to Speech").clicked() { self.request_final_screenshot(ctx, PendingAction::Speak); }
+                    if ui.button(CLOUD).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.execute_action_immediate(ctx, PendingAction::Upload); }
+                    if ui.button(GOOGLE).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.execute_action_immediate(ctx, PendingAction::Google); }
+                    if ui.button(ALIGN_LEFT).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::OCR); }
+                    if ui.button("TTS").on_hover_text("Image to Speech").clicked() { self.execute_action_immediate(ctx, PendingAction::Speak); }
                     if ui.button(PRINT).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
-                    if ui.button(SAVE).on_hover_text("Save (Ctrl+S)").clicked() { self.request_final_screenshot(ctx, PendingAction::Save); }
-                    if ui.button(COPY).on_hover_text("Copy (Ctrl+C)").clicked() { self.request_final_screenshot(ctx, PendingAction::Copy); }
+                    if ui.button(SAVE).on_hover_text("Save (Ctrl+S)").clicked() { self.execute_action_immediate(ctx, PendingAction::Save); }
+                    if ui.button(COPY).on_hover_text("Copy (Ctrl+C)").clicked() { self.execute_action_immediate(ctx, PendingAction::Copy); }
                     if ui.button(CLOSE).on_hover_text("Close (Esc)").clicked() { self.deactivate(ctx); }
                 });
             });

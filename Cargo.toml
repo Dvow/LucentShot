@@ -2,6 +2,20 @@
 name = "lightshotv2"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
+
+[package.metadata.winres]
+FileDescription = "Lightshot Clone - Screenshot tool"
+ProductName = "Lightshot Clone"
+CompanyName = "Lightshot Clone"
+OriginalFilename = "lightshotv2.exe"
+LegalCopyright = "Copyright (C) 2025"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+debug = false
 
 [dependencies]
 screenshots = "0.8"
@@ -30,3 +44,6 @@ softbuffer = "0.4"
 tray-icon = "0.14"
 windows-sys = { version = "0.61.2", features = ["Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell"] }
 serde = { version = "1.0.228", features = ["derive"] }
+
+[build-dependencies]
+winres = "0.1"
