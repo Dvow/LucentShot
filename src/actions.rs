@@ -210,26 +210,63 @@ pub fn image_to_text(img: &DynamicImage) -> Result<String> {
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
-        Ok(trimmed.to_string())
+        Ok(fix_ocr_slashed_zero(trimmed).to_string())
     }
+}
+
+/// Fix slashed zero misreads: replace € or @ with 0 when they appear in a numeric context.
+fn fix_ocr_slashed_zero(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let is_zero_like = c == '€' || c == '@';
+        let prev_digit_or_dot = out.chars().last().map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false);
+        let next_digit_or_dot = chars.peek().map(|&c| c.is_ascii_digit() || c == '.').unwrap_or(false);
+        if is_zero_like && (prev_digit_or_dot || next_digit_or_dot) {
+            out.push('0');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn app_base_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if !dirs.contains(&cwd) {
+            dirs.push(cwd);
+        }
+    }
+    if dirs.is_empty() {
+        dirs.push(PathBuf::from("."));
+    }
+    dirs
 }
 
 fn tesseract_command() -> Result<std::process::Command> {
     if let Ok(custom) = std::env::var("TESSERACT_PATH") {
         let path = PathBuf::from(custom);
-        if !path.exists() {
-            return Err(anyhow!("TESSERACT_PATH not found: {}", path.display()));
+        if path.exists() {
+            return Ok(std::process::Command::new(path));
         }
-        return Ok(std::process::Command::new(path));
+        return Err(anyhow!("TESSERACT_PATH not found: {}", path.display()));
     }
 
-    let local_release = PathBuf::from("third_party/tesseract/build/bin/Release/tesseract.exe");
-    if local_release.exists() {
-        return Ok(std::process::Command::new(local_release));
-    }
-    let local_debug = PathBuf::from("third_party/tesseract/build/bin/Debug/tesseract.exe");
-    if local_debug.exists() {
-        return Ok(std::process::Command::new(local_debug));
+    for base in app_base_dirs() {
+        let local_release = base.join("third_party/tesseract/build/bin/Release/tesseract.exe");
+        if local_release.exists() {
+            return Ok(std::process::Command::new(local_release));
+        }
+        let local_debug = base.join("third_party/tesseract/build/bin/Debug/tesseract.exe");
+        if local_debug.exists() {
+            return Ok(std::process::Command::new(local_debug));
+        }
     }
 
     Ok(std::process::Command::new("tesseract"))
@@ -243,18 +280,19 @@ fn resolve_tessdata_dir() -> Result<PathBuf> {
         }
     }
 
-    let local_root = PathBuf::from("third_party/tessdata");
-    if local_root.join("eng.traineddata").exists() {
-        return Ok(local_root);
-    }
-
-    let local_in_tesseract = PathBuf::from("third_party/tesseract/tessdata");
-    if local_in_tesseract.join("eng.traineddata").exists() {
-        return Ok(local_in_tesseract);
+    for base in app_base_dirs() {
+        let local_root = base.join("third_party/tessdata");
+        if local_root.join("eng.traineddata").exists() {
+            return Ok(local_root);
+        }
+        let local_in_tesseract = base.join("third_party/tesseract/tessdata");
+        if local_in_tesseract.join("eng.traineddata").exists() {
+            return Ok(local_in_tesseract);
+        }
     }
 
     Err(anyhow!(
-        "Missing eng.traineddata. Download tessdata and set TESSDATA_PREFIX to the folder. Example: https://github.com/tesseract-ocr/tessdata"
+        "Missing eng.traineddata. Set TESSDATA_PREFIX to the folder containing eng.traineddata, or place third_party/tessdata next to the exe or in the project root."
     ))
 }
 
@@ -304,15 +342,9 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
             ,settings.tts_rate
             ,settings.tts_volume
         );
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .creation_flags(0x08000000)
-            .output()?;
-
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Speech Error: {}", err));
-        }
+        // Spawn PowerShell with STARTUPINFOW.wShowWindow = SW_HIDE so no console window appears.
+        // (CREATE_NO_WINDOW can prevent the speech process from playing audio.)
+        run_tts_powershell_silent(&script)?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -320,6 +352,59 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
         return Err(anyhow!("Image to speech is only supported on Windows"));
     }
 
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn run_tts_powershell_silent(script: &str) -> Result<()> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        CreateProcessW, GetExitCodeProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOW,
+        INFINITE,
+    };
+    let cmd = format!(
+        "powershell.exe -NoProfile -WindowStyle Hidden -Command \"{}\"",
+        script.replace('"', "\\\"")
+    );
+    let mut wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut si = STARTUPINFOW::default();
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    si.dwFlags = windows::Win32::System::Threading::STARTF_USESHOWWINDOW;
+    si.wShowWindow = 0; // SW_HIDE
+
+    let mut pi = PROCESS_INFORMATION::default();
+
+    let ok = unsafe {
+        CreateProcessW(
+            None,
+            windows::core::PWSTR(wide.as_mut_ptr()),
+            None,
+            None,
+            false,
+            windows::Win32::System::Threading::PROCESS_CREATION_FLAGS::default(),
+            None,
+            None,
+            &si,
+            &mut pi,
+        )
+    };
+
+    if ok.is_err() {
+        return Err(anyhow!("Failed to start TTS process"));
+    }
+
+    unsafe {
+        let _ = WaitForSingleObject(pi.hProcess, INFINITE);
+        let mut code: u32 = 0;
+        if GetExitCodeProcess(pi.hProcess, &mut code).is_ok() && code != 0 {
+            let _ = CloseHandle(pi.hProcess);
+            let _ = CloseHandle(pi.hThread);
+            return Err(anyhow!("Speech failed (exit code {})", code));
+        }
+        let _ = CloseHandle(pi.hProcess);
+        let _ = CloseHandle(pi.hThread);
+    }
     Ok(())
 }
 

@@ -37,7 +37,7 @@ rusttype = "0.9"
 egui_nerdfonts = "0.1"
 serde_json = "1.0"
 tempfile = "3.10"
-windows = { version = "0.56", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_Com", "Win32_System_Threading", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.56", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_Com", "Win32_System_Threading", "Win32_Security", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
 tiny-skia = "0.11"
 winit = "0.29"
 softbuffer = "0.4"

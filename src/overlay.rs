@@ -248,14 +248,19 @@ impl OverlayApp {
                     }
                 }
                 PendingAction::OCR => {
-                    if let Ok(text) = crate::actions::image_to_text(&cropped) {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(text);
+                    match crate::actions::image_to_text(&cropped) {
+                        Ok(text) => {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(text);
+                            }
                         }
+                        Err(e) => eprintln!("OCR (Image to Text) failed: {}", e),
                     }
                 }
                 PendingAction::Speak => {
-                    let _ = crate::actions::image_to_speech(&cropped);
+                    if let Err(e) = crate::actions::image_to_speech(&cropped) {
+                        eprintln!("TTS (Image to Speech) failed: {}", e);
+                    }
                 }
                 PendingAction::Google => {
                     let _ = crate::actions::google_search(&cropped);
