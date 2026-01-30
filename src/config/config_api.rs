@@ -78,7 +78,7 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
     }
 }
 
-fn config_path() -> PathBuf {
+fn default_config_path() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         PathBuf::from(appdata)
             .join("lightshotv2")
@@ -88,18 +88,52 @@ fn config_path() -> PathBuf {
     }
 }
 
+fn bootstrap_path() -> PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        PathBuf::from(appdata)
+            .join("lightshotv2")
+            .join("config_path.txt")
+    } else {
+        std::env::temp_dir().join("lightshotv2_config_path.txt")
+    }
+}
+
+fn config_path_from_bootstrap() -> PathBuf {
+    let bootstrap = bootstrap_path();
+    if let Ok(s) = fs::read_to_string(&bootstrap) {
+        let s = s.trim();
+        if !s.is_empty() {
+            return PathBuf::from(s);
+        }
+    }
+    default_config_path()
+}
+
 fn load_from_disk() -> Option<ConfigImpl> {
-    let path = config_path();
+    let path = config_path_from_bootstrap();
     let data = fs::read_to_string(path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
 fn save_to_disk(config: &ConfigImpl) -> Result<(), String> {
-    let path = config_path();
+    let path = if config.general_config_path.trim().is_empty() {
+        default_config_path()
+    } else {
+        PathBuf::from(config.general_config_path.trim())
+    };
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let data = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    fs::write(path, data).map_err(|e| e.to_string())?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    let bootstrap = bootstrap_path();
+    if config.general_config_path.trim().is_empty() {
+        let _ = fs::remove_file(bootstrap);
+    } else {
+        if let Some(parent) = bootstrap.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(bootstrap, path.to_string_lossy().as_bytes());
+    }
     Ok(())
 }

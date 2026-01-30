@@ -89,10 +89,29 @@ fn render_general(ui: &mut egui::Ui, config: &mut ConfigImpl) {
     );
     ui.add_space(8.0);
 
-    egui::Grid::new("general_language_grid")
+    egui::Grid::new("general_grid")
         .num_columns(2)
         .spacing([10.0, 8.0])
         .show(ui, |ui| {
+            ui.label("Config file path");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut config.general_config_path)
+                        .desired_width(260.0)
+                        .hint_text("Default"),
+                );
+                if ui.button("Browse…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("config", &["json"])
+                        .set_file_name("config.json")
+                        .save_file()
+                    {
+                        config.general_config_path = path.to_string_lossy().to_string();
+                    }
+                }
+            });
+            ui.end_row();
+
             ui.label("Language");
             egui::ComboBox::from_id_source("language_select")
                 .selected_text(&config.general_language)
