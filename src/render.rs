@@ -1,17 +1,19 @@
 use image::{DynamicImage, Rgba};
+use std::sync::OnceLock;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin, FillRule};
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale};
 use crate::config::{Shape, Tool};
 
-lazy_static::lazy_static! {
-    static ref FONT: Font<'static> = {
+fn font() -> &'static Font<'static> {
+    static FONT: OnceLock<Font<'static>> = OnceLock::new();
+    FONT.get_or_init(|| {
         let font_data = include_bytes!("C:\\Windows\\Fonts\\arial.ttf");
         Font::try_from_bytes(font_data as &[u8]).expect("Error constructing Font")
-    };
+    })
 }
 
-pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: egui::Rect, ppp: f32) -> DynamicImage {
+pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: eframe::egui::Rect, ppp: f32) -> DynamicImage {
     let rgba_img_base = full_img.as_rgba8().unwrap();
     let (phys_w, phys_h) = rgba_img_base.dimensions();
 
@@ -177,7 +179,7 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: egu
                     (pos.x * ppp) as i32,
                     (pos.y * ppp) as i32,
                     scale,
-                    &*FONT,
+                    font(),
                     &shape.text
                 );
             }

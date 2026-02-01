@@ -1,5 +1,4 @@
-use eframe::egui;
-use egui::{Color32, Pos2, Rect, Stroke, Id, Key};
+use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Id, Key};
 use image::DynamicImage;
 use std::sync::Arc;
 use std::thread;
@@ -308,7 +307,7 @@ impl OverlayApp {
 
 fn handle_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool) {
     if !auto_close_upload {
-        let _ = webbrowser::open(url);
+        let _ = crate::actions::open_url(url);
     }
     if auto_copy_link {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {

@@ -127,6 +127,36 @@ pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     Ok(false)
 }
 
+/// Opens a URL in the default browser (Windows: ShellExecuteW).
+#[cfg(target_os = "windows")]
+pub fn open_url(url: &str) -> Result<()> {
+    use std::iter;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
+    use windows::core::PCWSTR;
+
+    let wide: Vec<u16> = url.encode_utf16().chain(iter::once(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            windows::core::w!("open"),
+            PCWSTR::from_raw(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOW,
+        )
+    };
+    if result.0 as i32 <= 32 {
+        return Err(anyhow!("Failed to open URL (ShellExecuteW returned {})", result.0));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn open_url(url: &str) -> Result<()> {
+    Err(anyhow!("Opening URLs is only supported on Windows"))
+}
+
 fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
     let config = crate::config::cfg();
     let (bytes, ext, mime) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
@@ -159,18 +189,17 @@ pub fn google_search(img: &DynamicImage) -> Result<()> {
     println!("Image hosted at: {}", direct_url);
 
     let search_url = format!("https://lens.google.com/uploadbyurl?url={}", direct_url);
-    if let Err(e) = webbrowser::open(&search_url) {
-        return Err(anyhow!("Failed to open browser: {}", e));
-    }
+    open_url(&search_url)?;
     Ok(())
 }
 
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
     let tessdata_dir = resolve_tessdata_dir()?;
 
-    let temp_dir = tempfile::tempdir()?;
-    let input_path = temp_dir.path().join("ocr_input.png");
-    let output_base = temp_dir.path().join("ocr_output");
+    let temp_dir = std::env::temp_dir().join(format!("lightshotv2_ocr_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir)?;
+    let input_path = temp_dir.join("ocr_input.png");
+    let output_base = temp_dir.join("ocr_output");
     let processed = preprocess_for_ocr(img);
     processed.save(&input_path)?;
 
@@ -205,8 +234,9 @@ pub fn image_to_text(img: &DynamicImage) -> Result<String> {
     }
 
     let text_path = output_base.with_extension("txt");
-    let text = fs::read_to_string(text_path)?;
+    let text = fs::read_to_string(&text_path)?;
     let trimmed = text.trim();
+    let _ = fs::remove_dir_all(&temp_dir);
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
@@ -640,13 +670,14 @@ fn save_temp_image(
 
 #[cfg(target_os = "windows")]
 fn set_clipboard_file(path: &std::path::Path) -> Result<()> {
-    use windows_sys::Win32::System::DataExchange::{
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{
+    use windows::Win32::System::Memory::{
         GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
     };
-    use windows_sys::Win32::UI::Shell::DROPFILES;
+    use windows::Win32::UI::Shell::DROPFILES;
 
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
@@ -658,28 +689,26 @@ fn set_clipboard_file(path: &std::path::Path) -> Result<()> {
 
     const CF_HDROP: u32 = 15;
     unsafe {
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size);
-        if hglobal.is_null() {
-            return Err(anyhow!("Failed to allocate clipboard memory"));
-        }
-        let ptr = GlobalLock(hglobal) as *mut u8;
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size)
+            .map_err(|_| anyhow!("Failed to allocate clipboard memory"))?;
+        let ptr = GlobalLock(hglobal);
         if ptr.is_null() {
             return Err(anyhow!("Failed to lock clipboard memory"));
         }
 
+        let ptr = ptr as *mut u8;
         let dropfiles = ptr as *mut DROPFILES;
         (*dropfiles).pFiles = dropfiles_size as u32;
-        (*dropfiles).fWide = 1;
+        (*dropfiles).fWide = windows::Win32::Foundation::BOOL::from(true);
 
         let list_ptr = ptr.add(dropfiles_size) as *mut u16;
         std::ptr::copy_nonoverlapping(wide.as_ptr(), list_ptr, wide.len());
-        GlobalUnlock(hglobal);
+        let _ = GlobalUnlock(hglobal);
 
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return Err(anyhow!("Failed to open clipboard"));
-        }
+        OpenClipboard(None).map_err(|_| anyhow!("Failed to open clipboard"))?;
         let _ = EmptyClipboard();
-        if SetClipboardData(CF_HDROP, hglobal) == std::ptr::null_mut() {
+        let hdrop = HANDLE(hglobal.0 as _);
+        if SetClipboardData(CF_HDROP, hdrop).is_err() {
             let _ = CloseClipboard();
             return Err(anyhow!("Failed to set clipboard file"));
         }

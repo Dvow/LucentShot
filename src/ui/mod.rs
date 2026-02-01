@@ -242,13 +242,13 @@ fn capture_hotkey_input(
 
     if next_key.is_none() {
         let snapshot_down = unsafe {
-            ((windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as i32,
-            ) as i32) & 0x8000) != 0
+            (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as i32,
+            ) as u16) & 0x8000 != 0
         };
         if snapshot_down && !*last_snapshot_down {
             next_key = Some(
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as u32,
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as u32,
             );
             next_ctrl = Some(false);
             next_shift = Some(false);

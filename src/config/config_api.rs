@@ -48,7 +48,7 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
     };
     let instant_save_binding = crate::hotkey::parse_hotkey_combo(&config.hotkey_instant_save_combo)
         .unwrap_or(HotkeyBinding {
-            key: Some(windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as u32),
+            key: Some(windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as u32),
             modifiers: egui::Modifiers {
                 ctrl: false,
                 shift: true,
@@ -59,7 +59,7 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
         });
     let instant_upload_binding = crate::hotkey::parse_hotkey_combo(&config.hotkey_instant_upload_combo)
         .unwrap_or(HotkeyBinding {
-            key: Some(windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as u32),
+            key: Some(windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as u32),
             modifiers: egui::Modifiers {
                 ctrl: true,
                 shift: false,
@@ -70,7 +70,7 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
         });
     let copy_focused_window_binding = crate::hotkey::parse_hotkey_combo(&config.hotkey_copy_focused_window_combo)
         .unwrap_or(HotkeyBinding {
-            key: Some(windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT as u32),
+            key: Some(windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as u32),
             modifiers: egui::Modifiers {
                 ctrl: false,
                 shift: false,

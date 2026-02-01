@@ -1,5 +1,5 @@
 use anyhow::Result;
-use egui::ColorImage;
+use eframe::egui::ColorImage;
 
 pub struct RawCapture {
     pub width: i32,
