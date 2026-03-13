@@ -45,6 +45,9 @@ once_cell = "1.19"
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
 
+[patch.crates-io]
+tesseract-static = { path = "patched-crates/tesseract-static" }
+
 [build-dependencies]
 winres = "0.1"
 ureq = { version = "2", default-features = false }

@@ -3804,8 +3804,6 @@ dependencies = [
 [[package]]
 name = "tesseract-static"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b0e95afdaa72b769cc043391bbad75fa15a1dc0f50e57df1a26388a6d53095d"
 dependencies = [
  "dlopen",
  "lazy_static",
