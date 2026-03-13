@@ -53,6 +53,8 @@ fn main() {
             .with_inner_size([0.0, 0.0]) // But 0x0 size
             .with_taskbar(false) // No taskbar icon
             .with_transparent(true),
+        follow_system_theme: false,
+        default_theme: eframe::Theme::Dark,
         ..Default::default()
     };
 
@@ -63,6 +65,7 @@ fn main() {
             let mut fonts = egui::FontDefinitions::default();
             egui_nerdfonts::add_to_fonts(&mut fonts, egui_nerdfonts::Variant::Regular);
             cc.egui_ctx.set_fonts(fonts);
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
             
             let trigger_flag = Arc::new(AtomicBool::new(false));
             let config_snapshot = config::cfg().clone();

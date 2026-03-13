@@ -23,6 +23,8 @@ impl SettingsTab {
 pub struct SettingsWindowState {
     pub active_tab: SettingsTab,
     pub last_snapshot_down: bool,
+    /// Cached TTS voices; populated lazily when TTS tab is shown (get_tts_voices spawns PowerShell).
+    pub tts_voices_cache: Option<Vec<String>>,
 }
 
 impl Default for SettingsWindowState {
@@ -30,6 +32,7 @@ impl Default for SettingsWindowState {
         Self {
             active_tab: SettingsTab::General,
             last_snapshot_down: false,
+            tts_voices_cache: None,
         }
     }
 }
@@ -64,7 +67,7 @@ pub fn show_settings_window(
             SettingsTab::General => render_general(ui, config),
             SettingsTab::Hotkeys => render_hotkeys(ctx, ui, state, config),
             SettingsTab::Formats => render_formats(ui, config),
-            SettingsTab::Tts => render_tts(ui, config),
+            SettingsTab::Tts => render_tts(ui, state, config),
         }
     });
 }
@@ -342,8 +345,30 @@ fn render_formats(ui: &mut egui::Ui, config: &mut ConfigImpl) {
         });
 }
 
-fn render_tts(ui: &mut egui::Ui, config: &mut ConfigImpl) {
+fn render_tts(ui: &mut egui::Ui, state: &mut SettingsWindowState, config: &mut ConfigImpl) {
     ui.add_space(6.0);
+    ui.label("Voice");
+    let voices = state.tts_voices_cache.get_or_insert_with(crate::actions::get_tts_voices);
+    let selected_display = if config.tts_voice.is_empty() {
+        "(Default)".to_string()
+    } else {
+        config.tts_voice.clone()
+    };
+    egui::ComboBox::from_id_source("tts_voice")
+        .selected_text(selected_display)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(config.tts_voice.is_empty(), "(Default)").clicked() {
+                config.tts_voice = String::new();
+                crate::config::save();
+            }
+            for name in voices.iter() {
+                if ui.selectable_label(config.tts_voice == *name, name.as_str()).clicked() {
+                    config.tts_voice = name.clone();
+                    crate::config::save();
+                }
+            }
+        });
+    ui.add_space(10.0);
     ui.label("Speech rate");
     ui.add(egui::Slider::new(&mut config.tts_rate, -10..=10));
     ui.add_space(10.0);

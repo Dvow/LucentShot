@@ -1,5 +1,5 @@
 use arboard::{Clipboard, ImageData};
-use image::{DynamicImage, GrayImage, imageops::FilterType};
+use image::{DynamicImage, imageops::FilterType};
 use image::codecs::jpeg::JpegEncoder;
 use rfd::FileDialog;
 use anyhow::{Result, anyhow};
@@ -8,12 +8,8 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::io::Cursor;
 use std::fs;
-use std::path::PathBuf;
-use imageproc::contrast::{otsu_level, threshold_mut};
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use serde_json::json;
 
 pub enum CopyResult {
@@ -193,55 +189,205 @@ pub fn google_search(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
+/// Show error to user via Windows message box (call from UI/action handler).
+#[cfg(target_os = "windows")]
+pub fn show_ocr_error(msg: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONWARNING};
+    use std::iter;
+    let text: Vec<u16> = msg.encode_utf16().chain(iter::once(0)).collect();
+    let title: Vec<u16> = "OCR Error".encode_utf16().chain(iter::once(0)).collect();
+    unsafe {
+        let _ = MessageBoxW(None, windows::core::PCWSTR(text.as_ptr()), windows::core::PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_ocr_error(_msg: &str) {
+    eprintln!("OCR Error: {}", _msg);
+}
+
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
-    let tessdata_dir = resolve_tessdata_dir()?;
-
-    let temp_dir = std::env::temp_dir().join(format!("lightshotv2_ocr_{}", std::process::id()));
-    fs::create_dir_all(&temp_dir)?;
-    let input_path = temp_dir.join("ocr_input.png");
-    let output_base = temp_dir.join("ocr_output");
-    let processed = preprocess_for_ocr(img);
-    processed.save(&input_path)?;
-
-    let mut cmd = tesseract_command()?;
     #[cfg(target_os = "windows")]
     {
-        cmd.creation_flags(0x08000000);
-    }
-    cmd.env("TESSDATA_PREFIX", &tessdata_dir);
-    cmd.arg(&input_path)
-        .arg(&output_base)
-        .arg("-l")
-        .arg("eng")
-        .arg("--oem")
-        .arg("1")
-        .arg("--psm")
-        .arg("3")
-        .arg("--dpi")
-        .arg("300")
-        .arg("-c")
-        .arg("preserve_interword_spaces=1");
-
-    let output = cmd.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(anyhow!(
-            "Tesseract failed.\nstdout: {}\nstderr: {}",
-            stdout.trim(),
-            stderr.trim()
-        ));
+        image_to_text_windows_ocr(img)
     }
 
-    let text_path = output_base.with_extension("txt");
-    let text = fs::read_to_string(&text_path)?;
-    let trimmed = text.trim();
-    let _ = fs::remove_dir_all(&temp_dir);
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(anyhow!("OCR is only supported on Windows (uses Windows.Media.Ocr API)"))
+    }
+}
+
+/// Minimum dimension (px) for reliable Windows OCR. Windows.Media.Ocr fails on small images
+/// (e.g. <50px height, <40px width). Upscale small crops before passing to the engine.
+const MIN_OCR_DIM: u32 = 100;
+
+/// Upscale image if too small for Windows OCR. Uses Lanczos3 for quality.
+fn upscale_for_ocr_if_needed(img: &DynamicImage) -> DynamicImage {
+    let w = img.width();
+    let h = img.height();
+    let min_side = w.min(h);
+    if min_side >= MIN_OCR_DIM {
+        return img.clone();
+    }
+    let scale = ((MIN_OCR_DIM as f32 / min_side as f32).ceil() as u32).max(2);
+    let new_w = (w * scale).max(MIN_OCR_DIM);
+    let new_h = (h * scale).max(MIN_OCR_DIM);
+    DynamicImage::ImageRgba8(image::imageops::resize(
+        &img.to_rgba8(),
+        new_w,
+        new_h,
+        FilterType::Lanczos3,
+    ))
+}
+
+/// Uses Windows.Media.Ocr (built-in Windows API) - no Tesseract required.
+#[cfg(target_os = "windows")]
+fn image_to_text_windows_ocr(img: &DynamicImage) -> Result<String> {
+    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Security::Cryptography::CryptographicBuffer;
+
+    let img = upscale_for_ocr_if_needed(img);
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    // Convert Rgba8 to Bgra8 (swap R and B for Windows format)
+    let mut bgra: Vec<u8> = rgba.into_raw();
+    for chunk in bgra.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+    }
+
+    let buffer = CryptographicBuffer::CreateFromByteArray(bgra.as_slice())?;
+    let software_bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(
+        &buffer,
+        BitmapPixelFormat::Bgra8,
+        width as i32,
+        height as i32,
+        BitmapAlphaMode::Premultiplied,
+    )?;
+
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| anyhow!("Windows OCR engine init failed: {:?}", e))?;
+
+    let async_op = engine.RecognizeAsync(&software_bitmap)?;
+    let result = async_op.get()?;
+    let text = ocr_result_to_read_order(&result)?;
+    let trimmed = text.trim().to_string();
+
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
-        Ok(fix_ocr_slashed_zero(trimmed).to_string())
+        let refined = refine_ocr_text(&trimmed);
+        Ok(fix_ocr_slashed_zero(&refined))
     }
+}
+
+/// Build text in left-to-right, top-to-bottom reading order.
+/// Flattens all words, clusters by row (adaptive threshold from median height),
+/// sorts each row left-to-right. Handles mixed column/line layouts and
+/// mixed-case words on the same line.
+#[cfg(target_os = "windows")]
+fn ocr_result_to_read_order(result: &windows::Media::Ocr::OcrResult) -> Result<String> {
+    use windows::Media::Ocr::{OcrLine, OcrWord};
+    use windows::Foundation::Collections::IVectorView;
+
+    let lines = result.Lines()?;
+    let mut words: Vec<(String, f32, f32)> = Vec::new();
+    let mut heights: Vec<f32> = Vec::new();
+    for i in 0..lines.Size()? {
+        let line: OcrLine = lines.GetAt(i)?;
+        let line_words: IVectorView<OcrWord> = line.Words()?;
+        for j in 0..line_words.Size()? {
+            let word = line_words.GetAt(j)?;
+            let text = word.Text()?.to_string();
+            if text.is_empty() {
+                continue;
+            }
+            let rect = word.BoundingRect()?;
+            let center_y = rect.Y + rect.Height / 2.0;
+            words.push((text, center_y, rect.X));
+            heights.push(rect.Height);
+        }
+    }
+    if words.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Adaptive row threshold: half median line height so words on same line cluster
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_h = heights[heights.len() / 2];
+    let row_threshold = (median_h * 0.6).max(6.0);
+
+    // Assign row index by clustering: sort by Y, new row when Y jump > threshold
+    words.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut rowed: Vec<(String, u32, f32)> = Vec::with_capacity(words.len());
+    let mut row_id = 0u32;
+    let mut last_y = f32::NEG_INFINITY;
+    for (text, y, x) in words {
+        if y - last_y > row_threshold && last_y != f32::NEG_INFINITY {
+            row_id += 1;
+        }
+        last_y = y;
+        rowed.push((text, row_id, x));
+    }
+
+    // Sort by row, then X (left-to-right within each line)
+    rowed.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
+
+    let mut out = String::new();
+    let mut last_row = u32::MAX;
+    for (text, row, _x) in rowed {
+        if row != last_row && last_row != u32::MAX {
+            out.push('\n');
+        } else if !out.is_empty() && !out.ends_with('\n') {
+            out.push(' ');
+        }
+        last_row = row;
+        out.push_str(&text);
+    }
+    Ok(out)
+}
+
+/// Refine OCR output for readability: collapse spaces around punctuation,
+/// replace common misreads (bullet → arrow), normalize spacing.
+fn refine_ocr_text(s: &str) -> String {
+    let mut t = s.to_string();
+    // Collapse spaces around punctuation (order: longer patterns first)
+    let replacements: &[(&str, &str)] = &[
+        (" : : ", "::"),
+        (" : ", ":"),
+        (" . ", "."),
+        (" \" , \" ", "\", \""),
+        (" \" , ", "\", "),
+        (" \" ", "\""),
+        (" ( ", "("),
+        (" ) ", ")"),
+        (" , ", ", "),
+        (" • ", " => "),
+        // Bullet misread as =>, often adjacent to quotes or colons
+        (" •\"", "\""),
+        ("\"• ", "\" "),
+        ("•\"", "\""),
+        (":•", "::"),
+        ("•.", ""),
+        ("•G", " G"),
+    ];
+    for (from, to) in replacements {
+        while t.contains(from) {
+            t = t.replace(from, to);
+        }
+    }
+    // Common OCR misreads in format names (l↔i, letter order)
+    let fixes: &[(&str, &str)] = &[("Glf", "Gif"), ("glf", "gif"), ("BmP", "BMP")];
+    for (from, to) in fixes {
+        t = t.replace(from, to);
+    }
+    // Collapse multiple spaces
+    while t.contains("  ") {
+        t = t.replace("  ", " ");
+    }
+    t
 }
 
 /// Fix slashed zero misreads: replace € or @ with 0 when they appear in a numeric context.
@@ -259,86 +405,6 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
         }
     }
     out
-}
-
-fn app_base_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            dirs.push(parent.to_path_buf());
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        if !dirs.contains(&cwd) {
-            dirs.push(cwd);
-        }
-    }
-    if dirs.is_empty() {
-        dirs.push(PathBuf::from("."));
-    }
-    dirs
-}
-
-fn tesseract_command() -> Result<std::process::Command> {
-    if let Ok(custom) = std::env::var("TESSERACT_PATH") {
-        let path = PathBuf::from(custom);
-        if path.exists() {
-            return Ok(std::process::Command::new(path));
-        }
-        return Err(anyhow!("TESSERACT_PATH not found: {}", path.display()));
-    }
-
-    for base in app_base_dirs() {
-        let local_release = base.join("third_party/tesseract/build/bin/Release/tesseract.exe");
-        if local_release.exists() {
-            return Ok(std::process::Command::new(local_release));
-        }
-        let local_debug = base.join("third_party/tesseract/build/bin/Debug/tesseract.exe");
-        if local_debug.exists() {
-            return Ok(std::process::Command::new(local_debug));
-        }
-    }
-
-    Ok(std::process::Command::new("tesseract"))
-}
-
-fn resolve_tessdata_dir() -> Result<PathBuf> {
-    if let Ok(env_path) = std::env::var("TESSDATA_PREFIX") {
-        let path = PathBuf::from(env_path);
-        if path.join("eng.traineddata").exists() {
-            return Ok(path);
-        }
-    }
-
-    for base in app_base_dirs() {
-        let local_root = base.join("third_party/tessdata");
-        if local_root.join("eng.traineddata").exists() {
-            return Ok(local_root);
-        }
-        let local_in_tesseract = base.join("third_party/tesseract/tessdata");
-        if local_in_tesseract.join("eng.traineddata").exists() {
-            return Ok(local_in_tesseract);
-        }
-    }
-
-    Err(anyhow!(
-        "Missing eng.traineddata. Set TESSDATA_PREFIX to the folder containing eng.traineddata, or place third_party/tessdata next to the exe or in the project root."
-    ))
-}
-
-fn preprocess_for_ocr(img: &DynamicImage) -> DynamicImage {
-    let gray = img.to_luma8();
-    let scaled = upscale_gray(&gray, 2);
-    let level = otsu_level(&scaled);
-    let mut binary = scaled.clone();
-    threshold_mut(&mut binary, level);
-    DynamicImage::ImageLuma8(binary)
-}
-
-fn upscale_gray(img: &GrayImage, factor: u32) -> GrayImage {
-    let width = img.width().saturating_mul(factor);
-    let height = img.height().saturating_mul(factor);
-    image::imageops::resize(img, width, height, FilterType::Lanczos3)
 }
 
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
@@ -361,19 +427,25 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
+        let voice_part = if settings.tts_voice.trim().is_empty() {
+            String::new()
+        } else {
+            let escaped = settings.tts_voice.trim().replace("'", "''");
+            format!("$s.SelectVoice('{}'); ", escaped)
+        };
         let script = format!(
             "Add-Type -AssemblyName System.Speech; \
              $t = Get-Content -Raw -Path '{}'; \
              $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+             {}; \
              $s.Rate = {}; \
              $s.Volume = {}; \
              $s.Speak($t);",
             path.display().to_string().replace("'", "''")
+            ,voice_part
             ,settings.tts_rate
             ,settings.tts_volume
         );
-        // Spawn PowerShell with STARTUPINFOW.wShowWindow = SW_HIDE so no console window appears.
-        // (CREATE_NO_WINDOW can prevent the speech process from playing audio.)
         run_tts_powershell_silent(&script)?;
     }
 
@@ -385,13 +457,50 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
+/// Returns installed Windows TTS voice names. Empty on non-Windows or if listing fails.
+pub fn get_tts_voices() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | ForEach-Object { if ($_.Enabled) { $_.VoiceInfo.Name } }";
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", script])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+static TTS_PROCESS: std::sync::OnceLock<std::sync::RwLock<Option<windows::Win32::Foundation::HANDLE>>> = std::sync::OnceLock::new();
+
 #[cfg(target_os = "windows")]
 fn run_tts_powershell_silent(script: &str) -> Result<()> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOW,
-        INFINITE,
+        CreateProcessW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
+        PROCESS_INFORMATION, STARTUPINFOW, INFINITE,
     };
+    let tts_lock = TTS_PROCESS.get_or_init(|| std::sync::RwLock::new(None));
+
+    // Terminate any currently playing TTS before starting new one
+    {
+        let mut guard = tts_lock.write().unwrap();
+        if let Some(prev) = guard.take() {
+            unsafe {
+                let _ = TerminateProcess(prev, 1);
+                let _ = CloseHandle(prev);
+            }
+        }
+    }
+
     let cmd = format!(
         "powershell.exe -NoProfile -WindowStyle Hidden -Command \"{}\"",
         script.replace('"', "\\\"")
@@ -424,16 +533,26 @@ fn run_tts_powershell_silent(script: &str) -> Result<()> {
         return Err(anyhow!("Failed to start TTS process"));
     }
 
+    // Store our process handle so a future TTS can terminate us
+    {
+        let mut guard = tts_lock.write().unwrap();
+        *guard = Some(pi.hProcess);
+    }
+
     unsafe {
         let _ = WaitForSingleObject(pi.hProcess, INFINITE);
         let mut code: u32 = 0;
-        if GetExitCodeProcess(pi.hProcess, &mut code).is_ok() && code != 0 {
+        let _ = GetExitCodeProcess(pi.hProcess, &mut code);
+        let mut guard = tts_lock.write().unwrap();
+        let was_replaced = guard.as_ref() != Some(&pi.hProcess);
+        if !was_replaced {
+            *guard = None;
             let _ = CloseHandle(pi.hProcess);
-            let _ = CloseHandle(pi.hThread);
+        }
+        let _ = CloseHandle(pi.hThread);
+        if !was_replaced && code != 0 {
             return Err(anyhow!("Speech failed (exit code {})", code));
         }
-        let _ = CloseHandle(pi.hProcess);
-        let _ = CloseHandle(pi.hThread);
     }
     Ok(())
 }

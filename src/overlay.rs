@@ -21,6 +21,7 @@ pub struct OverlayApp {
     pub current_color: Color32,
     pub last_saved_color: Color32,
     pub shapes: Vec<Shape>,
+    pub redo_stack: Vec<Shape>,
     pub active_shape: Option<Shape>,
     pub is_active: bool,
     pub trigger_flag: Arc<AtomicBool>,
@@ -116,6 +117,7 @@ impl OverlayApp {
             current_color: saved_color,
             last_saved_color: saved_color,
             shapes: Vec::new(),
+            redo_stack: Vec::new(),
             active_shape: None,
             is_active: false,
             trigger_flag,
@@ -158,6 +160,7 @@ impl OverlayApp {
                 self.selection = None;
             }
             self.shapes.clear();
+            self.redo_stack.clear();
             self.active_shape = None;
             self.editing_text_index = None;
             self.pending_action = None;
@@ -259,12 +262,12 @@ impl OverlayApp {
                                 let _ = clipboard.set_text(text);
                             }
                         }
-                        Err(e) => eprintln!("OCR (Image to Text) failed: {}", e),
+                        Err(e) => crate::actions::show_ocr_error(&e.to_string()),
                     }
                 }
                 PendingAction::Speak => {
                     if let Err(e) = crate::actions::image_to_speech(&cropped) {
-                        eprintln!("TTS (Image to Speech) failed: {}", e);
+                        crate::actions::show_ocr_error(&format!("Image to Speech failed: {}", e));
                     }
                 }
                 PendingAction::Google => {
@@ -386,6 +389,7 @@ impl eframe::App for OverlayApp {
         let mut trigger_copy = false;
         let mut trigger_save = false;
         let mut trigger_undo = false;
+        let mut trigger_redo = false;
         let mut trigger_upload = false;
         let mut trigger_google = false;
         let mut trigger_print = false;
@@ -397,7 +401,8 @@ impl eframe::App for OverlayApp {
                     egui::Event::Copy => trigger_copy = true,
                     egui::Event::Key { key: Key::C, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_copy = true,
                     egui::Event::Key { key: Key::S, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_save = true,
-                    egui::Event::Key { key: Key::Z, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_undo = true,
+                    egui::Event::Key { key: Key::Z, pressed: true, modifiers, .. } if (modifiers.ctrl || modifiers.command) && !modifiers.shift => trigger_undo = true,
+                    egui::Event::Key { key: Key::Z, pressed: true, modifiers, .. } if (modifiers.ctrl || modifiers.command) && modifiers.shift => trigger_redo = true,
                     egui::Event::Key { key: Key::D, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_upload = true,
                     egui::Event::Key { key: Key::G, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_google = true,
                     egui::Event::Key { key: Key::P, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command => trigger_print = true,
@@ -407,7 +412,16 @@ impl eframe::App for OverlayApp {
             }
         });
 
-        if trigger_undo { self.shapes.pop(); }
+        if trigger_undo {
+            if let Some(shape) = self.shapes.pop() {
+                self.redo_stack.push(shape);
+            }
+        }
+        if trigger_redo {
+            if let Some(shape) = self.redo_stack.pop() {
+                self.shapes.push(shape);
+            }
+        }
         if trigger_select_all {
             self.selection = Some(ctx.screen_rect());
         }
@@ -496,6 +510,7 @@ impl eframe::App for OverlayApp {
                         if let Some(idx) = nodes.iter().position(|n| n.contains(pointer_pos)) { self.resizing_node = Some(idx); }
                         else if sel.contains(pointer_pos) {
                             if self.current_tool == Tool::Text {
+                                self.redo_stack.clear();
                                 self.shapes.push(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: 2.0, tool: Tool::Text, text: String::new(), is_marker: false, opacity: 1.0 });
                                 self.editing_text_index = Some(self.shapes.len() - 1);
                             } else {
@@ -536,7 +551,7 @@ impl eframe::App for OverlayApp {
 
                 if response.drag_stopped() {
                     self.is_selecting = false; self.resizing_node = None;
-                    if let Some(shape) = self.active_shape.take() { self.shapes.push(shape); }
+                    if let Some(shape) = self.active_shape.take() { self.redo_stack.clear(); self.shapes.push(shape); }
                     if let Some(sel) = self.selection {
                         self.selection = Some(Rect::from_two_pos(sel.min, sel.max));
                     }
@@ -744,31 +759,33 @@ impl OverlayApp {
     }
 
     fn show_toolbars(&mut self, ctx: &egui::Context, selection: Rect) {
+        const BTN_SIZE: f32 = 18.0;
+        let icon_color = Color32::WHITE;
         let toolbar_color = Color32::from_rgb(30, 30, 30);
         let spacing = 4.0;
         let v_height = 240.0;
         use egui_nerdfonts::regular::*;
         egui::Window::new("tools")
             .fixed_pos(egui::pos2(selection.max.x + spacing, selection.max.y - v_height + 50.0))
-            .title_bar(false).resizable(false).collapsible(false).fixed_size([25.0, v_height])
+            .title_bar(false).resizable(false).collapsible(false).fixed_size([BTN_SIZE + 4.0, v_height])
             .frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(2.0))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    if ui.selectable_label(self.current_tool == Tool::Pen, PENCIL).on_hover_text("Pen").clicked() { self.current_tool = Tool::Pen; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Pen, egui::RichText::new(PENCIL).color(icon_color))).on_hover_text("Pen").clicked() { self.current_tool = Tool::Pen; }
                     ui.add_space(2.0);
-                    if ui.selectable_label(self.current_tool == Tool::Line, SLASH).on_hover_text("Line").clicked() { self.current_tool = Tool::Line; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Line, egui::RichText::new(SLASH).color(icon_color))).on_hover_text("Line").clicked() { self.current_tool = Tool::Line; }
                     ui.add_space(2.0);
-                    if ui.selectable_label(self.current_tool == Tool::Arrow, ARROW_RIGHT).on_hover_text("Arrow").clicked() { self.current_tool = Tool::Arrow; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Arrow, egui::RichText::new(ARROW_RIGHT).color(icon_color))).on_hover_text("Arrow").clicked() { self.current_tool = Tool::Arrow; }
                     ui.add_space(2.0);
-                    if ui.selectable_label(self.current_tool == Tool::Rect, SQUARE).on_hover_text("Rectangle").clicked() { self.current_tool = Tool::Rect; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Rect, egui::RichText::new(SQUARE).color(icon_color))).on_hover_text("Rectangle").clicked() { self.current_tool = Tool::Rect; }
                     ui.add_space(2.0);
-                    if ui.selectable_label(self.current_tool == Tool::Marker, MARKER).on_hover_text("Marker").clicked() { self.current_tool = Tool::Marker; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Marker, egui::RichText::new(MARKER).color(icon_color))).on_hover_text("Marker").clicked() { self.current_tool = Tool::Marker; }
                     ui.add_space(2.0);
-                    if ui.selectable_label(self.current_tool == Tool::Text, FONT).on_hover_text("Text Tool").clicked() { self.current_tool = Tool::Text; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Text, egui::RichText::new(FONT).color(icon_color))).on_hover_text("Text Tool").clicked() { self.current_tool = Tool::Text; }
                     ui.separator();
                     let color_response = ui
                         .scope(|ui| {
-                            ui.spacing_mut().interact_size = egui::vec2(20.0, 20.0);
+                            ui.spacing_mut().interact_size = egui::vec2(BTN_SIZE, BTN_SIZE);
                             ui.color_edit_button_srgba(&mut self.current_color)
                         })
                         .response
@@ -785,25 +802,27 @@ impl OverlayApp {
                         crate::config::save();
                     }
                     ui.add_space(2.0);
-                    if ui.button(UNDO).on_hover_text("Undo (Ctrl+Z)").clicked() { self.shapes.pop(); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(UNDO).color(icon_color))).on_hover_text("Undo (Ctrl+Z)").clicked() {
+                        if let Some(shape) = self.shapes.pop() { self.redo_stack.push(shape); }
+                    }
                 });
             });
 
         let h_width = 280.0;
         egui::Window::new("actions")
             .fixed_pos(egui::pos2(selection.max.x - h_width + 50.0, selection.max.y + spacing))
-            .title_bar(false).resizable(false).collapsible(false).fixed_size([h_width, 35.0])
+            .title_bar(false).resizable(false).collapsible(false).fixed_size([h_width, BTN_SIZE + 8.0])
             .frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button(CLOUD).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.execute_action_immediate(ctx, PendingAction::Upload); }
-                    if ui.button(GOOGLE).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.execute_action_immediate(ctx, PendingAction::Google); }
-                    if ui.button(ALIGN_LEFT).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::OCR); }
-                    if ui.button("TTS").on_hover_text("Image to Speech").clicked() { self.execute_action_immediate(ctx, PendingAction::Speak); }
-                    if ui.button(PRINT).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
-                    if ui.button(SAVE).on_hover_text("Save (Ctrl+S)").clicked() { self.execute_action_immediate(ctx, PendingAction::Save); }
-                    if ui.button(COPY).on_hover_text("Copy (Ctrl+C)").clicked() { self.execute_action_immediate(ctx, PendingAction::Copy); }
-                    if ui.button(CLOSE).on_hover_text("Close (Esc)").clicked() { self.deactivate(ctx); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(CLOUD).color(icon_color))).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.execute_action_immediate(ctx, PendingAction::Upload); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(GOOGLE).color(icon_color))).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.execute_action_immediate(ctx, PendingAction::Google); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ALIGN_LEFT).color(icon_color))).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::OCR); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ACCOUNT_VOICE).color(icon_color))).on_hover_text("Image to Speech").clicked() { self.execute_action_immediate(ctx, PendingAction::Speak); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(PRINT).color(icon_color))).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(SAVE).color(icon_color))).on_hover_text("Save (Ctrl+S)").clicked() { self.execute_action_immediate(ctx, PendingAction::Save); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(COPY).color(icon_color))).on_hover_text("Copy (Ctrl+C)").clicked() { self.execute_action_immediate(ctx, PendingAction::Copy); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(CLOSE_THICK).color(icon_color))).on_hover_text("Close (Esc)").clicked() { self.deactivate(ctx); }
                 });
             });
 
