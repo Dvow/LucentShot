@@ -79,6 +79,10 @@ fn render_general(ui: &mut egui::Ui, config: &mut ConfigImpl) {
         "Copy link after upload",
     );
     ui.checkbox(
+        &mut config.general_show_notifications,
+        "Show notifications (toast popups for actions)",
+    );
+    ui.checkbox(
         &mut config.general_auto_close_upload,
         "Do not open upload page",
     );

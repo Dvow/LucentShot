@@ -5,6 +5,7 @@ use std::thread;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tray_icon::menu::MenuEvent;
+use tray_icon::{TrayIconEvent, MouseButton};
 use crate::config::{PendingAction, Shape, Tool};
 
 pub const MENU_ID_QUIT: &str = "menu_quit";
@@ -42,6 +43,8 @@ pub struct OverlayApp {
     pub hotkey_handle: crate::hotkey::HotkeyHandle,
     pub hotkey_rx: std::sync::mpsc::Receiver<crate::hotkey::HotkeyEvent>,
     pub pending_action: Option<PendingAction>,
+    ocr_clipboard_tx: std::sync::mpsc::Sender<String>,
+    ocr_clipboard_rx: std::sync::mpsc::Receiver<String>,
 }
 
 impl OverlayApp {
@@ -49,6 +52,7 @@ impl OverlayApp {
         let include_cursor = self.config.general_capture_cursor;
         let auto_copy_link = self.config.general_auto_copy_link;
         let auto_close_upload = self.config.general_auto_close_upload;
+        let show_notifications = self.config.general_show_notifications;
         thread::spawn(move || {
             let Ok(raw) = crate::capture::capture_primary_screen_raw(include_cursor) else { return };
             let width = raw.width;
@@ -63,13 +67,18 @@ impl OverlayApp {
             let img = image::DynamicImage::ImageRgba8(img_buffer);
             match action {
                 PendingAction::Save => {
-                    if let Ok(saved) = crate::actions::save_to_file(&img) {
-                        let _ = saved;
+                    if let Ok(true) = crate::actions::save_to_file(&img) {
+                        if show_notifications {
+                            crate::notification::show("Save", "Image saved");
+                        }
                     }
                 }
                 PendingAction::Upload => {
                     if let Ok(url) = crate::actions::prntsc_upload(&img) {
                         handle_upload_result(&url, auto_copy_link, auto_close_upload);
+                        if show_notifications {
+                            crate::notification::show("Upload", "Image uploaded");
+                        }
                     }
                 }
                 _ => {}
@@ -80,6 +89,7 @@ impl OverlayApp {
     fn handle_copy_focused_window(&self) {
         let copy_format = self.config.format;
         let copy_quality = self.config.jpeg_quality;
+        let show_notifications = self.config.general_show_notifications;
         thread::spawn(move || {
             let Ok(raw) = crate::capture::capture_focused_window_raw() else { return };
             let color_image = crate::capture::raw_to_color_image(raw);
@@ -90,7 +100,9 @@ impl OverlayApp {
             )
             .unwrap();
             let img = image::DynamicImage::ImageRgba8(img_buffer);
-            let _ = crate::actions::copy_to_clipboard(&img, copy_format, copy_quality);
+            if crate::actions::copy_to_clipboard(&img, copy_format, copy_quality).is_ok() && show_notifications {
+                crate::notification::show("Copy", "Copied to clipboard");
+            }
         });
     }
 
@@ -99,6 +111,7 @@ impl OverlayApp {
         hotkey_handle: crate::hotkey::HotkeyHandle,
         hotkey_rx: std::sync::mpsc::Receiver<crate::hotkey::HotkeyEvent>,
     ) -> Self {
+        let (ocr_clipboard_tx, ocr_clipboard_rx) = std::sync::mpsc::channel();
         let config = crate::config::cfg().clone();
         let saved_color = egui::Color32::from_rgba_unmultiplied(
             config.color_r,
@@ -138,6 +151,8 @@ impl OverlayApp {
             hotkey_handle,
             hotkey_rx,
             pending_action: None,
+            ocr_clipboard_tx,
+            ocr_clipboard_rx,
         }
     }
 
@@ -240,28 +255,35 @@ impl OverlayApp {
         let cropped = crate::render::render_and_crop(&screenshot, &shapes, sel, ppp);
         let auto_copy_link = self.config.general_auto_copy_link;
         let auto_close_upload = self.config.general_auto_close_upload;
+        let show_notifications = self.config.general_show_notifications;
         let copy_format = self.config.format;
         let copy_quality = self.config.jpeg_quality;
+        let ocr_tx = self.ocr_clipboard_tx.clone();
         thread::spawn(move || {
             match action {
                 PendingAction::Copy => {
-                    let _ = crate::actions::copy_to_clipboard(&cropped, copy_format, copy_quality);
+                    if crate::actions::copy_to_clipboard(&cropped, copy_format, copy_quality).is_ok() && show_notifications {
+                        crate::notification::show("Copy", "Copied to clipboard");
+                    }
                 }
                 PendingAction::Save => {
-                    let _ = crate::actions::save_to_file(&cropped);
+                    if let Ok(true) = crate::actions::save_to_file(&cropped) {
+                        if show_notifications {
+                            crate::notification::show("Save", "Image saved");
+                        }
+                    }
                 }
                 PendingAction::Upload => {
                     if let Ok(url) = crate::actions::prntsc_upload(&cropped) {
                         handle_upload_result(&url, auto_copy_link, auto_close_upload);
+                        if show_notifications {
+                            crate::notification::show("Upload", "Image uploaded");
+                        }
                     }
                 }
                 PendingAction::OCR => {
                     match crate::actions::image_to_text(&cropped) {
-                        Ok(text) => {
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                let _ = clipboard.set_text(text);
-                            }
-                        }
+                        Ok(text) => { let _ = ocr_tx.send(text); }
                         Err(e) => crate::actions::show_ocr_error(&e.to_string()),
                     }
                 }
@@ -327,12 +349,29 @@ fn handle_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool
 
 impl eframe::App for OverlayApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        // Process OCR results on main thread (clipboard must be set from UI thread on Windows)
+        while let Ok(text) = self.ocr_clipboard_rx.try_recv() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(text.clone());
+            }
+            if self.config.general_show_notifications {
+                crate::notification::show("OCR", "Text copied to clipboard");
+            }
+        }
+
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == MENU_ID_QUIT {
                 process::exit(0);
             }
             if event.id == MENU_ID_SETTINGS {
                 self.open_settings(ctx);
+            }
+        }
+
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                self.trigger_flag.store(true, Ordering::SeqCst);
+                break;
             }
         }
 
@@ -660,13 +699,6 @@ impl OverlayApp {
             &mut self.settings_state,
             &mut self.config,
         );
-        egui::TopBottomPanel::bottom("settings_footer").show(ctx, |ui| {
-            ui.add_space(8.0);
-            if ui.button("Close").clicked() {
-                self.close_settings(ctx);
-            }
-        });
-
         if before_config != self.config {
             {
                 let mut config = crate::config::cfg_mut();

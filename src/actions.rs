@@ -207,187 +207,106 @@ pub fn show_ocr_error(_msg: &str) {
 }
 
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
-    #[cfg(target_os = "windows")]
-    {
-        image_to_text_windows_ocr(img)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err(anyhow!("OCR is only supported on Windows (uses Windows.Media.Ocr API)"))
-    }
+    image_to_text_tesseract(img)
 }
 
-/// Minimum dimension (px) for reliable Windows OCR. Windows.Media.Ocr fails on small images
-/// (e.g. <50px height, <40px width). Upscale small crops before passing to the engine.
-const MIN_OCR_DIM: u32 = 100;
+/// Minimum dimension (px) for reliable OCR. 300 = ~300 DPI for 1" text.
+const MIN_OCR_DIM: u32 = 300;
 
-/// Upscale image if too small for Windows OCR. Uses Lanczos3 for quality.
-fn upscale_for_ocr_if_needed(img: &DynamicImage) -> DynamicImage {
+/// Preprocess image for OCR: upscale, grayscale, binarize (Otsu).
+/// Improves accuracy for clean printed text.
+fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
+    use imageproc::contrast;
+
+    // 1. Upscale if too small (target ~300 DPI equivalent)
     let w = img.width();
     let h = img.height();
     let min_side = w.min(h);
-    if min_side >= MIN_OCR_DIM {
-        return img.clone();
-    }
-    let scale = ((MIN_OCR_DIM as f32 / min_side as f32).ceil() as u32).max(2);
-    let new_w = (w * scale).max(MIN_OCR_DIM);
-    let new_h = (h * scale).max(MIN_OCR_DIM);
-    DynamicImage::ImageRgba8(image::imageops::resize(
-        &img.to_rgba8(),
-        new_w,
-        new_h,
-        FilterType::Lanczos3,
-    ))
+    let img = if min_side >= MIN_OCR_DIM {
+        img.clone()
+    } else {
+        let scale = ((MIN_OCR_DIM as f32 / min_side as f32).ceil() as u32).max(2);
+        let new_w = (w * scale).max(MIN_OCR_DIM);
+        let new_h = (h * scale).max(MIN_OCR_DIM);
+        DynamicImage::ImageRgba8(image::imageops::resize(
+            &img.to_rgba8(),
+            new_w,
+            new_h,
+            FilterType::Lanczos3,
+        ))
+    };
+
+    // 2. Convert to grayscale
+    let gray = img.to_luma8();
+
+    // 3. Binarize with Otsu threshold (black text on white background)
+    let level = contrast::otsu_level(&gray);
+    contrast::threshold(&gray, level)
 }
 
-/// Uses Windows.Media.Ocr (built-in Windows API) - no Tesseract required.
-#[cfg(target_os = "windows")]
-fn image_to_text_windows_ocr(img: &DynamicImage) -> Result<String> {
-    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
-    use windows::Media::Ocr::OcrEngine;
-    use windows::Security::Cryptography::CryptographicBuffer;
+/// Tessdata embedded at compile time — zero disk reads for the model file at build.
+static ENG_TRAINEDDATA: &[u8] = include_bytes!("../tessdata/eng.traineddata");
 
-    let img = upscale_for_ocr_if_needed(img);
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
+/// Tessdata path — extracted once to temp at first use, avoids repeated disk writes.
+static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
+    once_cell::sync::Lazy::new(|| {
+        let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
+        std::fs::create_dir_all(&tess_dir).expect("Failed to create tessdata dir");
+        std::fs::write(tess_dir.join("eng.traineddata"), ENG_TRAINEDDATA)
+            .expect("Failed to write eng.traineddata");
+        tess_dir
+    });
 
-    // Convert Rgba8 to Bgra8 (swap R and B for Windows format)
-    let mut bgra: Vec<u8> = rgba.into_raw();
-    for chunk in bgra.chunks_exact_mut(4) {
-        chunk.swap(0, 2);
-    }
+/// Pre-warms the OCR engine in a background thread: extracts tessdata to temp, runs one dummy
+/// Tesseract init so the DLL and model are loaded. Call at startup so the first real OCR is faster.
+pub fn warm_ocr_engine() {
+    std::thread::spawn(|| {
+        use tesseract_static::tesseract::Tesseract;
+        let path = TESSDATA_DIR.to_string_lossy();
+        let Ok(tess) = Tesseract::new(Some(path.as_ref()), Some("eng")) else { return };
+        let tess = tess.set_source_resolution(300);
+        let Ok(tess) = tess.set_frame(&[0u8], 1, 1, 1, 1) else { return };
+        let Ok(mut tess) = tess.recognize() else { return };
+        let _ = tess.get_text();
+    });
+}
 
-    let buffer = CryptographicBuffer::CreateFromByteArray(bgra.as_slice())?;
-    let software_bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(
-        &buffer,
-        BitmapPixelFormat::Bgra8,
-        width as i32,
-        height as i32,
-        BitmapAlphaMode::Premultiplied,
-    )?;
+/// Uses Tesseract OCR via tesseract-static. Tessdata extracted once; image passed as bytes (no disk I/O).
+/// Note: tesseract-static's builder API consumes self, so we create a new Tesseract per call.
+/// The main remaining cost is Tesseract::new() loading the model (~800ms–2s); tessdata write is skipped.
+fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
+    use tesseract_static::tesseract::Tesseract;
 
-    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
-        .map_err(|e| anyhow!("Windows OCR engine init failed: {:?}", e))?;
+    // Preprocess: upscale, grayscale, Otsu — passes bytes directly (no temp file)
+    let gray = preprocess_for_ocr(img);
+    let (width, height) = gray.dimensions();
+    let frame_data = gray.as_raw();
 
-    let async_op = engine.RecognizeAsync(&software_bitmap)?;
-    let result = async_op.get()?;
-    let text = ocr_result_to_read_order(&result)?;
+    let tessdata_path = TESSDATA_DIR.to_string_lossy();
+    let mut tess = Tesseract::new(Some(tessdata_path.as_ref()), Some("eng"))
+        .map_err(|e| anyhow!("Tesseract init failed: {}", e))?
+        .set_variable("tessedit_pageseg_mode", "6") // single uniform block — best for docs/crops
+        .map_err(|e| anyhow!("Tesseract config failed: {}", e))?
+        .set_source_resolution(300) // 300 DPI for printed text
+        .set_frame(
+            frame_data,
+            width as i32,
+            height as i32,
+            1,                // bytes_per_pixel (grayscale)
+            width as i32,     // bytes_per_line
+        )
+        .map_err(|e| anyhow!("Tesseract set_image failed: {}", e))?
+        .recognize()
+        .map_err(|e| anyhow!("Tesseract OCR failed: {}", e))?;
+
+    let text = tess.get_text().map_err(|e| anyhow!("Tesseract get_text failed: {}", e))?;
     let trimmed = text.trim().to_string();
 
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
-        let refined = refine_ocr_text(&trimmed);
-        Ok(fix_ocr_slashed_zero(&refined))
+        Ok(fix_ocr_slashed_zero(&trimmed))
     }
-}
-
-/// Build text in left-to-right, top-to-bottom reading order.
-/// Flattens all words, clusters by row (adaptive threshold from median height),
-/// sorts each row left-to-right. Handles mixed column/line layouts and
-/// mixed-case words on the same line.
-#[cfg(target_os = "windows")]
-fn ocr_result_to_read_order(result: &windows::Media::Ocr::OcrResult) -> Result<String> {
-    use windows::Media::Ocr::{OcrLine, OcrWord};
-    use windows::Foundation::Collections::IVectorView;
-
-    let lines = result.Lines()?;
-    let mut words: Vec<(String, f32, f32)> = Vec::new();
-    let mut heights: Vec<f32> = Vec::new();
-    for i in 0..lines.Size()? {
-        let line: OcrLine = lines.GetAt(i)?;
-        let line_words: IVectorView<OcrWord> = line.Words()?;
-        for j in 0..line_words.Size()? {
-            let word = line_words.GetAt(j)?;
-            let text = word.Text()?.to_string();
-            if text.is_empty() {
-                continue;
-            }
-            let rect = word.BoundingRect()?;
-            let center_y = rect.Y + rect.Height / 2.0;
-            words.push((text, center_y, rect.X));
-            heights.push(rect.Height);
-        }
-    }
-    if words.is_empty() {
-        return Ok(String::new());
-    }
-
-    // Adaptive row threshold: half median line height so words on same line cluster
-    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median_h = heights[heights.len() / 2];
-    let row_threshold = (median_h * 0.6).max(6.0);
-
-    // Assign row index by clustering: sort by Y, new row when Y jump > threshold
-    words.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut rowed: Vec<(String, u32, f32)> = Vec::with_capacity(words.len());
-    let mut row_id = 0u32;
-    let mut last_y = f32::NEG_INFINITY;
-    for (text, y, x) in words {
-        if y - last_y > row_threshold && last_y != f32::NEG_INFINITY {
-            row_id += 1;
-        }
-        last_y = y;
-        rowed.push((text, row_id, x));
-    }
-
-    // Sort by row, then X (left-to-right within each line)
-    rowed.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
-
-    let mut out = String::new();
-    let mut last_row = u32::MAX;
-    for (text, row, _x) in rowed {
-        if row != last_row && last_row != u32::MAX {
-            out.push('\n');
-        } else if !out.is_empty() && !out.ends_with('\n') {
-            out.push(' ');
-        }
-        last_row = row;
-        out.push_str(&text);
-    }
-    Ok(out)
-}
-
-/// Refine OCR output for readability: collapse spaces around punctuation,
-/// replace common misreads (bullet → arrow), normalize spacing.
-fn refine_ocr_text(s: &str) -> String {
-    let mut t = s.to_string();
-    // Collapse spaces around punctuation (order: longer patterns first)
-    let replacements: &[(&str, &str)] = &[
-        (" : : ", "::"),
-        (" : ", ":"),
-        (" . ", "."),
-        (" \" , \" ", "\", \""),
-        (" \" , ", "\", "),
-        (" \" ", "\""),
-        (" ( ", "("),
-        (" ) ", ")"),
-        (" , ", ", "),
-        (" • ", " => "),
-        // Bullet misread as =>, often adjacent to quotes or colons
-        (" •\"", "\""),
-        ("\"• ", "\" "),
-        ("•\"", "\""),
-        (":•", "::"),
-        ("•.", ""),
-        ("•G", " G"),
-    ];
-    for (from, to) in replacements {
-        while t.contains(from) {
-            t = t.replace(from, to);
-        }
-    }
-    // Common OCR misreads in format names (l↔i, letter order)
-    let fixes: &[(&str, &str)] = &[("Glf", "Gif"), ("glf", "gif"), ("BmP", "BMP")];
-    for (from, to) in fixes {
-        t = t.replace(from, to);
-    }
-    // Collapse multiple spaces
-    while t.contains("  ") {
-        t = t.replace("  ", " ");
-    }
-    t
 }
 
 /// Fix slashed zero misreads: replace € or @ with 0 when they appear in a numeric context.

@@ -2,6 +2,7 @@
 
 mod capture;
 mod hotkey;
+mod notification;
 mod actions;
 mod overlay;
 mod render;
@@ -16,11 +17,32 @@ use tray_icon::{
     TrayIconBuilder, Icon,
 };
 
+fn load_tray_icon() -> Icon {
+    let png_data = include_bytes!("icon/icon.png");
+    let img = image::load_from_memory(png_data).expect("Failed to load tray icon");
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    // Resize to 32x32 for tray if larger
+    let (w, h, data) = if w > 32 || h > 32 {
+        let scaled = image::imageops::resize(
+            &rgba,
+            32,
+            32,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let (w, h) = scaled.dimensions();
+        (w, h, scaled.into_raw())
+    } else {
+        (w, h, rgba.into_raw())
+    };
+    Icon::from_rgba(data, w, h).expect("Failed to create tray icon")
+}
+
 fn main() {
     config::init();
     actions::cleanup_old_copy_temp_files();
-    let icon_data = vec![150u8; 32 * 32 * 4]; 
-    let tray_icon = Icon::from_rgba(icon_data, 32, 32).expect("Failed to create tray icon");
+    actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
+    let tray_icon = load_tray_icon();
 
     let tray_menu = Menu::new();
     let settings_item = MenuItem::with_id(
@@ -40,19 +62,25 @@ fn main() {
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
-        .with_tooltip("Lightshotv2 - Ready")
+        .with_menu_on_left_click(false)
+        .with_tooltip("Lightshot Clone - Left-click to screenshot")
         .with_icon(tray_icon)
         .build()
         .unwrap();
     println!("DEBUG: Tray initialized: {:?}", tray.id());
 
+    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_decorations(false)
+        .with_visible(true)
+        .with_inner_size([0.0, 0.0])
+        .with_taskbar(false)
+        .with_transparent(true);
+    if let Some(ref icon) = icon_data {
+        viewport = viewport.with_icon(Arc::new(icon.clone()));
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_decorations(false)
-            .with_visible(true) // Must stay "visible" to keep the loop alive
-            .with_inner_size([0.0, 0.0]) // But 0x0 size
-            .with_taskbar(false) // No taskbar icon
-            .with_transparent(true),
+        viewport,
         follow_system_theme: false,
         default_theme: eframe::Theme::Dark,
         ..Default::default()

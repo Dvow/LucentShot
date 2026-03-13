@@ -5,6 +5,7 @@ use eframe::egui::{Color32, Pos2};
 #[serde(default)]
 pub struct ConfigImpl {
     pub general_auto_copy_link: bool,
+    pub general_show_notifications: bool,
     pub general_auto_close_upload: bool,
     pub general_keep_selected_area: bool,
     pub general_capture_cursor: bool,
@@ -44,6 +45,7 @@ impl Default for ConfigImpl {
     fn default() -> Self {
         Self {
             general_auto_copy_link: false,
+            general_show_notifications: true,
             general_auto_close_upload: false,
             general_keep_selected_area: false,
             general_capture_cursor: false,
