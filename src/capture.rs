@@ -7,6 +7,26 @@ pub struct RawCapture {
     pub pixels: Vec<u8>,
 }
 
+/// Virtual screen bounds: (x, y, width, height) covering all monitors.
+#[cfg(target_os = "windows")]
+pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+    unsafe {
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        (x, y, w, h)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
+    (0, 0, 1920, 1080)
+}
+
 #[cfg(target_os = "windows")]
 pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     use windows::Win32::Graphics::Gdi::{
@@ -16,20 +36,22 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DrawIconEx, GetCursorInfo, GetIconInfo, GetSystemMetrics, CURSORINFO, CURSOR_SHOWING,
-        DI_NORMAL, SM_CXSCREEN, SM_CYSCREEN,
+        DI_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
 
     unsafe {
-        let width = GetSystemMetrics(SM_CXSCREEN);
-        let height = GetSystemMetrics(SM_CYSCREEN);
+        let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
         let h_dc_screen = GetDC(None);
         let h_dc_mem = CreateCompatibleDC(h_dc_screen);
         let h_bitmap = CreateCompatibleBitmap(h_dc_screen, width, height);
         let h_old_obj = SelectObject(h_dc_mem, h_bitmap);
         
-        // HARDWARE BITBLT - FASTEST POSSIBLE CAPTURE
-        BitBlt(h_dc_mem, 0, 0, width, height, h_dc_screen, 0, 0, SRCCOPY)?;
+        // Capture the full virtual screen (all monitors)
+        BitBlt(h_dc_mem, 0, 0, width, height, h_dc_screen, vx, vy, SRCCOPY)?;
 
         if include_cursor {
             let mut cursor_info = CURSORINFO {
@@ -41,8 +63,8 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
             {
                 let mut icon_info = Default::default();
                 if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_ok() {
-                    let x = cursor_info.ptScreenPos.x - icon_info.xHotspot as i32;
-                    let y = cursor_info.ptScreenPos.y - icon_info.yHotspot as i32;
+                    let x = cursor_info.ptScreenPos.x - icon_info.xHotspot as i32 - vx;
+                    let y = cursor_info.ptScreenPos.y - icon_info.yHotspot as i32 - vy;
                     let _ = DrawIconEx(h_dc_mem, x, y, cursor_info.hCursor, 0, 0, 0, None, DI_NORMAL);
                     if icon_info.hbmMask.0 != 0 {
                         let _ = DeleteObject(icon_info.hbmMask);

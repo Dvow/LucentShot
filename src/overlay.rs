@@ -166,8 +166,14 @@ impl OverlayApp {
             self.is_active = true;
             
             ctx.memory_mut(|m| m.close_popup());
+            let (vx, vy, vw, vh) = crate::capture::get_virtual_screen_bounds();
+            let ppp = ctx.pixels_per_point();
+            let pos = egui::pos2(vx as f32 / ppp, vy as f32 / ppp);
+            let size = egui::vec2(vw as f32 / ppp, vh as f32 / ppp);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
