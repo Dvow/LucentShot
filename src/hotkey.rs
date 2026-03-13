@@ -6,7 +6,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_SHIFT, MOD_WIN,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, PostThreadMessageW, MSG, WM_APP, WM_HOTKEY};
+use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, PostThreadMessageW, MSG, WM_HOTKEY};
 use windows::Win32::UI::Input::KeyboardAndMouse as vk;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use eframe::egui;
@@ -69,10 +69,14 @@ pub enum HotkeyEvent {
     CopyFocusedWindow,
 }
 
+const MSG_UPDATE_CONFIG: u32 = 0x8001; // WM_APP + 1
+const MSG_SET_LISTENING: u32 = 0x8002; // WM_APP + 2
+
 #[derive(Clone)]
 pub struct HotkeyHandle {
     thread_id: u32,
     config: Arc<Mutex<HotkeyConfig>>,
+    listening: Arc<AtomicBool>,
 }
 
 impl HotkeyHandle {
@@ -81,7 +85,15 @@ impl HotkeyHandle {
             *guard = config;
         }
         unsafe {
-            let _ = PostThreadMessageW(self.thread_id, WM_APP + 1, WPARAM(0), LPARAM(0));
+            let _ = PostThreadMessageW(self.thread_id, MSG_UPDATE_CONFIG, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// Enable/disable hotkey listening. Only when true are hotkeys registered (overlay or settings visible).
+    pub fn set_listening(&self, listen: bool) {
+        self.listening.store(listen, Ordering::SeqCst);
+        unsafe {
+            let _ = PostThreadMessageW(self.thread_id, MSG_SET_LISTENING, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -93,14 +105,16 @@ pub fn start_low_level_hotkey_loop(
     event_tx: mpsc::Sender<HotkeyEvent>,
 ) -> HotkeyHandle {
     let config = Arc::new(Mutex::new(initial_config));
+    let listening = Arc::new(AtomicBool::new(false)); // Start disabled — no overlay visible
     let (tx, rx) = mpsc::channel();
     let config_thread = Arc::clone(&config);
+    let listening_thread = Arc::clone(&listening);
 
     thread::spawn(move || {
         unsafe {
             let thread_id = GetCurrentThreadId();
             let _ = tx.send(thread_id);
-            apply_hotkey_config(&config_thread);
+            apply_hotkey_config(&config_thread, &listening_thread);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -122,25 +136,28 @@ pub fn start_low_level_hotkey_loop(
                         }
                         _ => {}
                     }
-                } else if msg.message == WM_APP + 1 {
-                    apply_hotkey_config(&config_thread);
+                } else if msg.message == MSG_UPDATE_CONFIG || msg.message == MSG_SET_LISTENING {
+                    apply_hotkey_config(&config_thread, &listening_thread);
                 }
             }
         }
     });
 
     let thread_id = rx.recv().unwrap_or(0);
-    HotkeyHandle { thread_id, config }
+    HotkeyHandle { thread_id, config, listening }
 }
 
-fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>) {
-    let Ok(cfg) = config.lock() else { return };
+fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>, listening: &AtomicBool) {
     unsafe {
         let _ = UnregisterHotKey(None, 1);
         let _ = UnregisterHotKey(None, 2);
         let _ = UnregisterHotKey(None, 3);
         let _ = UnregisterHotKey(None, 4);
-
+    }
+    if !listening.load(Ordering::SeqCst) {
+        return; // Don't register — overlay/settings not visible
+    }
+    let Ok(cfg) = config.lock() else { return };
         if cfg.general_enabled {
             register_hotkey(1, cfg.general_binding);
         }
@@ -153,7 +170,6 @@ fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>) {
         if cfg.copy_focused_window_enabled {
             register_hotkey(4, cfg.copy_focused_window_binding);
         }
-    }
 }
 
 fn register_hotkey(id: u32, binding: HotkeyBinding) {

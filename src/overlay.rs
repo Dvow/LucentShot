@@ -195,11 +195,13 @@ impl OverlayApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
+            self.hotkey_handle.set_listening(true);
         }
     }
 
     fn deactivate(&mut self, ctx: &egui::Context) {
         self.is_active = false;
+        self.hotkey_handle.set_listening(false);
         self.show_print_popup = false;
         self.pending_action = None;
         self.texture = None;
@@ -218,6 +220,7 @@ impl OverlayApp {
 
     fn open_settings(&mut self, ctx: &egui::Context) {
         self.show_settings = true;
+        self.hotkey_handle.set_listening(true);
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(520.0, 360.0)));
@@ -233,6 +236,7 @@ impl OverlayApp {
     fn close_settings(&mut self, ctx: &egui::Context) {
         self.show_settings = false;
         if !self.is_active {
+            self.hotkey_handle.set_listening(false);
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
