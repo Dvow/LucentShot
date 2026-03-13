@@ -351,7 +351,7 @@ impl eframe::App for OverlayApp {
             return;
         }
 
-        if self.trigger_flag.swap(false, Ordering::SeqCst) {
+        if self.trigger_flag.swap(false, Ordering::SeqCst) && !self.is_active {
             self.activate(ctx);
         }
 
@@ -473,7 +473,12 @@ impl eframe::App for OverlayApp {
                 }
 
                 if let Some(sel) = current_sel {
-                    if !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup { self.show_toolbars(ctx, sel); }
+                    let ppp = ctx.pixels_per_point();
+                    let min_pts = 5.0 / ppp;
+                    let has_meaningful_selection = sel.width() >= min_pts && sel.height() >= min_pts;
+                    if has_meaningful_selection && !self.is_selecting && self.resizing_node.is_none() && !self.show_print_popup {
+                        self.show_toolbars(ctx, sel);
+                    }
                 }
 
                 if !self.show_print_popup
