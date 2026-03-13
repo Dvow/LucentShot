@@ -210,31 +210,23 @@ pub fn image_to_text(img: &DynamicImage) -> Result<String> {
     image_to_text_tesseract(img)
 }
 
-/// Minimum dimension (px) for reliable OCR. 300 = ~300 DPI for 1" text.
-const MIN_OCR_DIM: u32 = 300;
+const OCR_SCALE: u32 = 3;
 
-/// Preprocess image for OCR: upscale, grayscale, binarize (Otsu).
-/// Improves accuracy for clean printed text.
+/// Preprocess image for OCR: 3x upscale, grayscale, binarize (Otsu).
 fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     use imageproc::contrast;
 
-    // 1. Upscale if too small (target ~300 DPI equivalent)
+    // 1. Always 3x upscale
     let w = img.width();
     let h = img.height();
-    let min_side = w.min(h);
-    let img = if min_side >= MIN_OCR_DIM {
-        img.clone()
-    } else {
-        let scale = ((MIN_OCR_DIM as f32 / min_side as f32).ceil() as u32).max(2);
-        let new_w = (w * scale).max(MIN_OCR_DIM);
-        let new_h = (h * scale).max(MIN_OCR_DIM);
-        DynamicImage::ImageRgba8(image::imageops::resize(
-            &img.to_rgba8(),
-            new_w,
-            new_h,
-            FilterType::Lanczos3,
-        ))
-    };
+    let new_w = w * OCR_SCALE;
+    let new_h = h * OCR_SCALE;
+    let img = DynamicImage::ImageRgba8(image::imageops::resize(
+        &img.to_rgba8(),
+        new_w,
+        new_h,
+        FilterType::Lanczos3,
+    ));
 
     // 2. Convert to grayscale
     let gray = img.to_luma8();
@@ -247,7 +239,7 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
 /// Tessdata embedded at compile time — zero disk reads for the model file at build.
 static ENG_TRAINEDDATA: &[u8] = include_bytes!("../tessdata/eng.traineddata");
 
-/// Tessdata path — extracted once to temp at first use, avoids repeated disk writes.
+/// Tessdata path — extracted once to temp at first use.
 static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
     once_cell::sync::Lazy::new(|| {
         let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
@@ -257,51 +249,57 @@ static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
         tess_dir
     });
 
-/// Pre-warms the OCR engine in a background thread: extracts tessdata to temp, runs one dummy
-/// Tesseract init so the DLL and model are loaded. Call at startup so the first real OCR is faster.
+/// Reusable Tesseract instance — initialized once, reused for all OCR calls (30–80ms per image).
+use tesseract_static::tesseract_plumbing::TessBaseApi;
+use std::ffi::CString;
+
+static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
+    once_cell::sync::Lazy::new(|| {
+        let mut api = TessBaseApi::create();
+        let datapath = CString::new(TESSDATA_DIR.to_string_lossy().as_bytes()).unwrap();
+        let lang = CString::new("eng").unwrap();
+        api.init_2(Some(datapath.as_c_str()), Some(lang.as_c_str()))
+            .expect("Tesseract init failed");
+        let ps_mode = CString::new("tessedit_pageseg_mode").unwrap();
+        let ps_val = CString::new("6").unwrap(); // single uniform block
+        api.set_variable(ps_mode.as_c_str(), ps_val.as_c_str())
+            .expect("Tesseract set_variable failed");
+        std::sync::Mutex::new(api)
+    });
+
+/// Pre-warms the engine at startup — forces TESS_ENGINE init in background.
 pub fn warm_ocr_engine() {
     std::thread::spawn(|| {
-        use tesseract_static::tesseract::Tesseract;
-        let path = TESSDATA_DIR.to_string_lossy();
-        let Ok(tess) = Tesseract::new(Some(path.as_ref()), Some("eng")) else { return };
-        let tess = tess.set_source_resolution(300);
-        let Ok(tess) = tess.set_frame(&[0u8], 1, 1, 1, 1) else { return };
-        let Ok(mut tess) = tess.recognize() else { return };
-        let _ = tess.get_text();
+        once_cell::sync::Lazy::force(&TESS_ENGINE);
     });
 }
 
-/// Uses Tesseract OCR via tesseract-static. Tessdata extracted once; image passed as bytes (no disk I/O).
-/// Note: tesseract-static's builder API consumes self, so we create a new Tesseract per call.
-/// The main remaining cost is Tesseract::new() loading the model (~800ms–2s); tessdata write is skipped.
+/// OCR using the shared TessBaseApi — ~30–80ms per image (model stays in memory).
 fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
-    use tesseract_static::tesseract::Tesseract;
-
-    // Preprocess: upscale, grayscale, Otsu — passes bytes directly (no temp file)
     let gray = preprocess_for_ocr(img);
     let (width, height) = gray.dimensions();
     let frame_data = gray.as_raw();
 
-    let tessdata_path = TESSDATA_DIR.to_string_lossy();
-    let mut tess = Tesseract::new(Some(tessdata_path.as_ref()), Some("eng"))
-        .map_err(|e| anyhow!("Tesseract init failed: {}", e))?
-        .set_variable("tessedit_pageseg_mode", "6") // single uniform block — best for docs/crops
-        .map_err(|e| anyhow!("Tesseract config failed: {}", e))?
-        .set_source_resolution(300) // 300 DPI for printed text
-        .set_frame(
-            frame_data,
-            width as i32,
-            height as i32,
-            1,                // bytes_per_pixel (grayscale)
-            width as i32,     // bytes_per_line
-        )
-        .map_err(|e| anyhow!("Tesseract set_image failed: {}", e))?
-        .recognize()
-        .map_err(|e| anyhow!("Tesseract OCR failed: {}", e))?;
+    let mut api = TESS_ENGINE
+        .lock()
+        .map_err(|e| anyhow!("Tesseract lock poisoned: {}", e))?;
 
-    let text = tess.get_text().map_err(|e| anyhow!("Tesseract get_text failed: {}", e))?;
-    let trimmed = text.trim().to_string();
+    api.set_image(
+        frame_data,
+        width as i32,
+        height as i32,
+        1,            // bytes_per_pixel (grayscale)
+        width as i32, // bytes_per_line
+    )
+    .map_err(|e| anyhow!("Tesseract set_image failed: {:?}", e))?;
+    api.set_source_resolution(300); // 300 DPI for printed text
+    api.recognize().map_err(|e| anyhow!("Tesseract recognize failed: {:?}", e))?;
+    let raw = api
+        .get_utf8_text()
+        .map_err(|e| anyhow!("Tesseract get_text failed: {:?}", e))?;
+    let text = raw.as_ref().to_string_lossy().into_owned();
 
+    let trimmed = text.trim();
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
