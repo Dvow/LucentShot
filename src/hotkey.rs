@@ -148,19 +148,22 @@ pub fn start_low_level_hotkey_loop(
 }
 
 fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>, listening: &AtomicBool) {
+    let Ok(cfg) = config.lock() else { return };
+    let overlay_visible = listening.load(Ordering::SeqCst);
+
     unsafe {
         let _ = UnregisterHotKey(None, 1);
         let _ = UnregisterHotKey(None, 2);
         let _ = UnregisterHotKey(None, 3);
         let _ = UnregisterHotKey(None, 4);
     }
-    if !listening.load(Ordering::SeqCst) {
-        return; // Don't register — overlay/settings not visible
+
+    // General hotkey always active — triggers screenshot (overlay)
+    if cfg.general_enabled {
+        register_hotkey(1, cfg.general_binding);
     }
-    let Ok(cfg) = config.lock() else { return };
-        if cfg.general_enabled {
-            register_hotkey(1, cfg.general_binding);
-        }
+    // These only when overlay/settings visible — avoid stealing keys from other apps
+    if overlay_visible {
         if cfg.instant_save_enabled {
             register_hotkey(2, cfg.instant_save_binding);
         }
@@ -170,6 +173,7 @@ fn apply_hotkey_config(config: &Arc<Mutex<HotkeyConfig>>, listening: &AtomicBool
         if cfg.copy_focused_window_enabled {
             register_hotkey(4, cfg.copy_focused_window_binding);
         }
+    }
 }
 
 fn register_hotkey(id: u32, binding: HotkeyBinding) {

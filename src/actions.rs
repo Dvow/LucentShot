@@ -552,13 +552,13 @@ pub fn print_image_to(
     fit_to_page: bool,
     paper_size: &str
 ) -> Result<()> {
-    let temp_path = std::path::Path::new("C:\\Users\\Public\\lightshot_print.png");
-    img.save(temp_path)?;
+    let temp_path = std::env::temp_dir().join("lightshot_print.png");
+    img.save(&temp_path)?;
 
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        
+        let path_str = temp_path.to_string_lossy().replace('\'', "''");
         let script = format!(
             "Add-Type -AssemblyName System.Drawing; \
              $doc = New-Object System.Drawing.Printing.PrintDocument; \
@@ -570,7 +570,7 @@ pub fn print_image_to(
              foreach ($ps in $doc.PrinterSettings.PaperSizes) {{ \
                 if ($ps.PaperName -eq '{}') {{ $doc.DefaultPageSettings.PaperSize = $ps; break; }} \
              }} \
-             $img = [System.Drawing.Image]::FromFile('C:\\Users\\Public\\lightshot_print.png'); \
+             $img = [System.Drawing.Image]::FromFile('{}'); \
              $doc.add_PrintPage({{ \
                 $arg = $_; \
                 $rect = if ({}) {{ $arg.MarginBounds }} else {{ New-Object System.Drawing.Rectangle(0, 0, $img.Width, $img.Height) }}; \
@@ -590,6 +590,7 @@ pub fn print_image_to(
             if landscape { "$true" } else { "$false" },
             if grayscale { "$false" } else { "$true" },
             paper_size,
+            path_str,
             if fit_to_page { "$true" } else { "$false" },
             if fit_to_page { "$true" } else { "$false" }
         );
