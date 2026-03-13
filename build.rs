@@ -1,20 +1,38 @@
 fn main() {
     // Ensure tessdata/eng.traineddata exists (required for OCR)
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| manifest_dir.join("target"));
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".into());
+    let tessdata_src = manifest_dir.join("tessdata").join("eng.traineddata");
+    let tessdata_dst = target_dir.join(&profile).join("tessdata").join("eng.traineddata");
+
     let tessdata_dir = manifest_dir.join("tessdata");
     let eng_path = tessdata_dir.join("eng.traineddata");
     if !eng_path.exists() {
         std::fs::create_dir_all(&tessdata_dir).ok();
         println!("cargo:warning=Downloading eng.traineddata for Tesseract OCR...");
-        let url = "https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata";
-        match reqwest::blocking::get(url) {
-            Ok(resp) if resp.status().is_success() => {
-                if let Err(e) = std::fs::write(&eng_path, resp.bytes().unwrap_or_default()) {
-                    eprintln!("cargo:warning=Failed to write tessdata/eng.traineddata: {}", e);
+        // tessdata_fast is ~2.5MB vs tessdata_best ~15MB; good enough for most OCR
+        let url = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata";
+        match ureq::get(url).call() {
+            Ok(resp) if resp.status() == 200 => {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                if resp.into_reader().read_to_end(&mut bytes).is_ok() && !bytes.is_empty() {
+                    let _ = std::fs::write(&eng_path, bytes);
                 }
             }
             Ok(resp) => eprintln!("cargo:warning=Download failed (status {}): {}", resp.status(), url),
             Err(e) => eprintln!("cargo:warning=Download failed: {}. Run: Invoke-WebRequest -Uri \"{}\" -OutFile tessdata/eng.traineddata", e, url),
+        }
+    }
+    // Copy tessdata next to exe so runtime finds it (exe_dir/tessdata/)
+    if tessdata_src.exists() {
+        if let Err(e) = std::fs::create_dir_all(tessdata_dst.parent().unwrap())
+            .and_then(|_| std::fs::copy(&tessdata_src, &tessdata_dst))
+        {
+            eprintln!("cargo:warning=Could not copy tessdata to output: {}", e);
         }
     }
 

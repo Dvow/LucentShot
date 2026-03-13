@@ -60,15 +60,13 @@ fn main() {
     let _ = tray_menu.append(&settings_item);
     let _ = tray_menu.append(&quit_item);
 
-    let tray = TrayIconBuilder::new()
+    let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
         .with_menu_on_left_click(false)
         .with_tooltip("Lightshot Clone - Left-click to screenshot")
         .with_icon(tray_icon)
         .build()
         .unwrap();
-    println!("DEBUG: Tray initialized: {:?}", tray.id());
-
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
