@@ -38,9 +38,7 @@ pub fn set_clipboard_text(text: &str) -> Result<()> {
 pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     let config = crate::config::cfg();
     let (ext, filter_label) = format_extension_and_label(config.format);
-    let start_dir = std::env::var("USERPROFILE")
-        .map(|p| std::path::PathBuf::from(p).join("Pictures"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let start_dir = dirs::picture_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let mut i = 1;
     let mut file_name = format!("screenshot_{}.{}", i, ext);
     while start_dir.join(&file_name).exists() {
@@ -75,13 +73,17 @@ pub fn open_url(url: &str) -> Result<()> {
     webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {}", e))
 }
 
+static REQWEST_CLIENT: once_cell::sync::Lazy<reqwest::blocking::Client> =
+    once_cell::sync::Lazy::new(|| {
+        reqwest::blocking::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .build()
+            .expect("reqwest client")
+    });
+
 fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
     let config = crate::config::cfg();
     let (bytes, ext, mime) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
-
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()?;
 
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
@@ -89,7 +91,7 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
             .file_name(format!("screenshot.{}", ext))
             .mime_str(mime)?);
 
-    let resp = client.post("https://catbox.moe/user/api.php")
+    let resp = REQWEST_CLIENT.post("https://catbox.moe/user/api.php")
         .multipart(form)
         .send()?;
 
@@ -111,21 +113,14 @@ pub fn google_search(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
-/// Show error to user via Windows message box (call from UI/action handler).
-#[cfg(target_os = "windows")]
+/// Show error to user via native message dialog.
 pub fn show_ocr_error(msg: &str) {
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONWARNING};
-    use std::iter;
-    let text: Vec<u16> = msg.encode_utf16().chain(iter::once(0)).collect();
-    let title: Vec<u16> = "OCR Error".encode_utf16().chain(iter::once(0)).collect();
-    unsafe {
-        let _ = MessageBoxW(None, windows::core::PCWSTR(text.as_ptr()), windows::core::PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn show_ocr_error(_msg: &str) {
-    eprintln!("OCR Error: {}", _msg);
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("OCR Error")
+        .set_description(msg)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
@@ -412,10 +407,6 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
     let img_url = upload_to_anonymous_host(img)?;
     println!("Image host link: {}", img_url);
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()?;
-
     println!("Registering with Lightshot API...");
     let payload = json!({
         "jsonrpc": "2.0",
@@ -429,7 +420,7 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
         }
     });
 
-    let api_resp = client.post("https://api.prntscr.com/v1/")
+    let api_resp = REQWEST_CLIENT.post("https://api.prntscr.com/v1/")
         .json(&payload)
         .send()?;
 
@@ -441,98 +432,109 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
 }
 
 pub fn get_printers() -> Vec<String> {
-    let mut printers = Vec::new();
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_ENUM_CONNECTIONS, PRINTER_INFO_4W};
-
-        unsafe {
-            let mut needed: u32 = 0;
-            let mut returned: u32 = 0;
-            let _ = EnumPrintersW(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS, None, 4, None, &mut needed, &mut returned);
-            
-            if needed > 0 {
-                let mut buffer = vec![0u8; needed as usize];
-                if EnumPrintersW(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS, None, 4, Some(&mut buffer), &mut needed, &mut returned).is_ok() {
-                    let info = buffer.as_ptr() as *const PRINTER_INFO_4W;
-                    for i in 0..returned {
-                        let printer = &*info.add(i as usize);
-                        if let Ok(name) = printer.pPrinterName.to_string() {
-                            printers.push(name);
-                        }
-                    }
+        use winprint::printer::PrinterDevice;
+        match PrinterDevice::all() {
+            Ok(devices) => {
+                let names: Vec<String> = devices.into_iter().map(|d| d.name().to_string()).collect();
+                if names.is_empty() {
+                    vec!["Microsoft Print to PDF".to_string()]
+                } else {
+                    names
                 }
             }
+            Err(_) => vec!["Microsoft Print to PDF".to_string()],
         }
     }
-    
-    if printers.is_empty() {
-        printers.push("Microsoft Print to PDF".to_string());
+    #[cfg(not(target_os = "windows"))]
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn paper_size_to_predefined(paper: &str) -> Option<winprint::ticket::PredefinedMediaName> {
+    match paper.trim() {
+        "A4" => Some(winprint::ticket::PredefinedMediaName::ISOA4),
+        "Letter" => Some(winprint::ticket::PredefinedMediaName::NorthAmericaLetter),
+        "Legal" => Some(winprint::ticket::PredefinedMediaName::NorthAmericaLegal),
+        _ => winprint::ticket::PredefinedMediaName::try_from(paper).ok(),
     }
-    printers
 }
 
 pub fn print_image_to(
-    img: &DynamicImage, 
-    printer_name: &str, 
-    copies: i32, 
-    landscape: bool, 
+    img: &DynamicImage,
+    printer_name: &str,
+    copies: i32,
+    landscape: bool,
     grayscale: bool,
-    fit_to_page: bool,
-    paper_size: &str
+    _fit_to_page: bool,
+    paper_size: &str,
 ) -> Result<()> {
     let temp_path = std::env::temp_dir().join("lightshot_print.png");
     img.save(&temp_path)?;
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        let path_str = temp_path.to_string_lossy().replace('\'', "''");
-        let script = format!(
-            "Add-Type -AssemblyName System.Drawing; \
-             $doc = New-Object System.Drawing.Printing.PrintDocument; \
-             $doc.DocumentName = 'Lightshot Capture'; \
-             $doc.PrinterSettings.PrinterName = '{}'; \
-             $doc.PrinterSettings.Copies = {}; \
-             $doc.DefaultPageSettings.Landscape = {}; \
-             $doc.DefaultPageSettings.Color = {}; \
-             foreach ($ps in $doc.PrinterSettings.PaperSizes) {{ \
-                if ($ps.PaperName -eq '{}') {{ $doc.DefaultPageSettings.PaperSize = $ps; break; }} \
-             }} \
-             $img = [System.Drawing.Image]::FromFile('{}'); \
-             $doc.add_PrintPage({{ \
-                $arg = $_; \
-                $rect = if ({}) {{ $arg.MarginBounds }} else {{ New-Object System.Drawing.Rectangle(0, 0, $img.Width, $img.Height) }}; \
-                if ({}) {{ \
-                    if ($img.Width / $img.Height -gt $rect.Width / $rect.Height) {{ \
-                        $rect.Height = $img.Height * $rect.Width / $img.Width; \
-                    }} else {{ \
-                        $rect.Width = $img.Width * $rect.Height / $img.Height; \
-                    }} \
-                }} \
-                $arg.Graphics.DrawImage($img, $rect); \
-             }}); \
-             $doc.Print(); \
-             $img.Dispose();",
-            printer_name.replace("'", "''"),
-            copies,
-            if landscape { "$true" } else { "$false" },
-            if grayscale { "$false" } else { "$true" },
-            paper_size,
-            path_str,
-            if fit_to_page { "$true" } else { "$false" },
-            if fit_to_page { "$true" } else { "$false" }
-        );
+        use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
+        use winprint::ticket::{Copies, PrintCapabilities, PrintTicketBuilder};
+        use winprint::ticket::{FeatureOptionPack, FeatureOptionPackWithPredefined};
+        use winprint::ticket::{PredefinedPageOrientation, PredefinedPageOutputColor};
 
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .creation_flags(0x08000000) 
-            .output()?;
+        let devices = PrinterDevice::all().map_err(|e| anyhow!("List printers: {:?}", e))?;
+        let device = devices
+            .into_iter()
+            .find(|d| d.name() == printer_name)
+            .ok_or_else(|| anyhow!("Printer not found: {}", printer_name))?;
 
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Advanced Print Error: {}", err));
+        let capabilities = PrintCapabilities::fetch(&device)
+            .map_err(|e| anyhow!("Fetch capabilities: {:?}", e))?;
+
+        let mut builder = PrintTicketBuilder::new(&device).map_err(|e| anyhow!("Print ticket: {:?}", e))?;
+
+        builder.merge(Copies(copies.clamp(1, 9999) as u16))?;
+
+        let orient = if landscape {
+            PredefinedPageOrientation::Landscape
+        } else {
+            PredefinedPageOrientation::Portrait
+        };
+        if let Some(opt) = winprint::ticket::PageOrientation::list(&capabilities)
+            .find(|o| o.as_predefined_name() == Some(orient))
+        {
+            let _ = builder.merge(opt);
         }
+
+        let color = if grayscale {
+            PredefinedPageOutputColor::Grayscale
+        } else {
+            PredefinedPageOutputColor::Color
+        };
+        if let Some(opt) = winprint::ticket::PageOutputColor::list(&capabilities)
+            .find(|o| o.as_predefined_name() == Some(color))
+        {
+            let _ = builder.merge(opt);
+        }
+
+        if let Some(predef) = paper_size_to_predefined(paper_size) {
+            if let Some(media) = capabilities
+                .page_media_sizes()
+                .find(|m| m.as_predefined_name() == Some(predef))
+            {
+                let _ = builder.merge(media);
+            }
+        }
+
+        let ticket = builder.build().map_err(|e| anyhow!("Build ticket: {:?}", e))?;
+        let printer = ImagePrinter::new(device);
+        printer
+            .print(&temp_path, ticket)
+            .map_err(|e| anyhow!("Print: {:?}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (printer_name, copies, landscape, grayscale, paper_size);
+        return Err(anyhow!("Printing is only supported on Windows"));
     }
 
     Ok(())

@@ -1,4 +1,6 @@
 fn main() {
+    // Font is provided by the dejavu crate (embedded in binary — no downloads or user installs)
+
     // Ensure tessdata/eng.traineddata exists (required for OCR)
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let tessdata_dir = manifest_dir.join("tessdata");
