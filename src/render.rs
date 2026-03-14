@@ -60,10 +60,12 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: efr
         
         paint.anti_alias = true;
 
-        let mut stroke = Stroke::default();
-        stroke.width = shape.stroke_width * ppp;
-        stroke.line_cap = LineCap::Round;
-        stroke.line_join = LineJoin::Round;
+        let stroke = Stroke {
+            width: shape.stroke_width * ppp,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Default::default()
+        };
 
         let mut pb = PathBuilder::new();
 

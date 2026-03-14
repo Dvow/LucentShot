@@ -31,7 +31,7 @@ pub fn cfg_mut() -> RwLockWriteGuard<'static, ConfigImpl> {
 pub fn save() {
     let config = cfg();
     if let Err(err) = save_to_disk(&config) {
-        eprintln!("Config save failed: {}", err);
+        eprintln!("Config save failed: {err}");
     }
 }
 

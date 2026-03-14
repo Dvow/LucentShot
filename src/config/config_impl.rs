@@ -127,6 +127,7 @@ pub enum PendingAction {
     Copy,
     Save,
     Upload,
+    #[allow(clippy::upper_case_acronyms)]
     OCR,
     Speak,
     Print {

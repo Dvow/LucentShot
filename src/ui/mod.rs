@@ -309,7 +309,7 @@ fn format_binding(
     if let Some(label) = crate::hotkey::vk_label(key) {
         parts.push(label);
     } else {
-        return format!("VK_{}", key);
+        return format!("VK_{key}");
     }
     parts.join(" + ")
 }

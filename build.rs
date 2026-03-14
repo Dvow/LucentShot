@@ -12,11 +12,11 @@ fn main() {
         match reqwest::blocking::get(url) {
             Ok(resp) if resp.status().is_success() => {
                 if let Err(e) = std::fs::write(&eng_path, resp.bytes().unwrap_or_default()) {
-                    eprintln!("cargo:warning=Failed to write tessdata/eng.traineddata: {}", e);
+                    eprintln!("cargo:warning=Failed to write tessdata/eng.traineddata: {e}");
                 }
             }
             Ok(resp) => eprintln!("cargo:warning=Download failed (status {}): {}", resp.status(), url),
-            Err(e) => eprintln!("cargo:warning=Download failed: {}. Run: Invoke-WebRequest -Uri \"{}\" -OutFile tessdata/eng.traineddata", e, url),
+            Err(e) => eprintln!("cargo:warning=Download failed: {e}. Run: Invoke-WebRequest -Uri \"{url}\" -OutFile tessdata/eng.traineddata"),
         }
     }
 
@@ -29,7 +29,7 @@ fn main() {
         if let Ok(img) = image::open(&icon_png) {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
-            let (w, h) = (w.min(256).max(1), h.min(256).max(1));
+            let (w, h) = (w.clamp(1, 256), h.clamp(1, 256));
             let resized = if (rgba.width(), rgba.height()) != (w, h) {
                 image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Lanczos3)
             } else {
@@ -70,7 +70,7 @@ fn main() {
 "#,
     );
     if let Err(e) = res.compile() {
-        eprintln!("winres: {}", e);
+        eprintln!("winres: {e}");
         std::process::exit(1);
     }
 }

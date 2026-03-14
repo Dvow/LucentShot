@@ -117,6 +117,6 @@ fn main() {
             ))
         }),
     ) {
-        eprintln!("Fatal Error: {}", e);
+        eprintln!("Fatal Error: {e}");
     }
 }

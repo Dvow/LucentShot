@@ -75,7 +75,7 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
             biHeight: -height, // negative for top-down
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             ..Default::default()
         };
 
@@ -165,7 +165,7 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
             biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             ..Default::default()
         };
         let mut buffer: Vec<u8> = vec![0; (width * height * 4) as usize];

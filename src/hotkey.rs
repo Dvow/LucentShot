@@ -180,7 +180,7 @@ pub fn start_low_level_hotkey_loop(
         unsafe {
             let thread_id = GetCurrentThreadId();
             let _ = tx.send(thread_id);
-            apply_hotkey_config(&config_thread, &*listening_thread);
+            apply_hotkey_config(&config_thread, &listening_thread);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -203,7 +203,7 @@ pub fn start_low_level_hotkey_loop(
                         _ => {}
                     }
                 } else if msg.message == MSG_UPDATE_CONFIG || msg.message == MSG_SET_LISTENING {
-                    apply_hotkey_config(&config_thread, &*listening_thread);
+                    apply_hotkey_config(&config_thread, &listening_thread);
                 }
             }
         }
@@ -259,7 +259,7 @@ fn register_hotkey(id: u32, binding: HotkeyBinding) {
     let modifiers = egui_modifiers_to_win(binding.modifiers);
     unsafe {
         if RegisterHotKey(None, id as i32, modifiers, vk).is_err() {
-            eprintln!("Failed to register hotkey {}", id);
+            eprintln!("Failed to register hotkey {id}");
         }
     }
 }
@@ -456,15 +456,15 @@ pub fn parse_hotkey_combo(combo: &str) -> Option<HotkeyBinding> {
 fn token_to_vk(token: &str) -> Option<u32> {
     if token.len() == 1 {
         let c = token.chars().next()?;
-        if ('A'..='Z').contains(&c) {
+        if c.is_ascii_uppercase() {
             return Some(vk::VK_A + (c as u32 - 'A' as u32));
         }
-        if ('0'..='9').contains(&c) {
+        if c.is_ascii_digit() {
             return Some(vk::VK_0 + (c as u32 - '0' as u32));
         }
     }
-    if token.starts_with('F') {
-        if let Ok(num) = token[1..].parse::<u32>() {
+    if let Some(rest) = token.strip_prefix('F') {
+        if let Ok(num) = rest.parse::<u32>() {
             if (1..=12).contains(&num) {
                 return Some(vk::VK_F1 + (num - 1));
             }

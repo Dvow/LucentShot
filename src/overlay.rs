@@ -293,7 +293,7 @@ impl OverlayApp {
                 }
                 PendingAction::Speak => {
                     if let Err(e) = crate::actions::image_to_speech(&cropped) {
-                        crate::actions::show_ocr_error(&format!("Image to Speech failed: {}", e));
+                        crate::actions::show_ocr_error(&format!("Image to Speech failed: {e}"));
                     }
                 }
                 PendingAction::Google => {

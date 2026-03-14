@@ -18,21 +18,21 @@ pub fn copy_to_clipboard(
 ) -> Result<CopyResult> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Clipboard: {}", e))?;
+    let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Clipboard: {e}"))?;
     clipboard
         .set_image(ImageData {
             width: width as usize,
             height: height as usize,
             bytes: Cow::Owned(rgba.into_raw()),
         })
-        .map_err(|e| anyhow!("Clipboard set_image: {}", e))?;
+        .map_err(|e| anyhow!("Clipboard set_image: {e}"))?;
     Ok(CopyResult::Image)
 }
 
 pub fn set_clipboard_text(text: &str) -> Result<()> {
     Clipboard::new()
         .and_then(|mut c| c.set_text(text.to_owned()))
-        .map_err(|e| anyhow!("Clipboard: {}", e))
+        .map_err(|e| anyhow!("Clipboard: {e}"))
 }
 
 pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
@@ -40,10 +40,10 @@ pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     let (ext, filter_label) = format_extension_and_label(config.format);
     let start_dir = dirs::picture_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let mut i = 1;
-    let mut file_name = format!("screenshot_{}.{}", i, ext);
+    let mut file_name = format!("screenshot_{i}.{ext}");
     while start_dir.join(&file_name).exists() {
         i += 1;
-        file_name = format!("screenshot_{}.{}", i, ext);
+        file_name = format!("screenshot_{i}.{ext}");
     }
 
     if let Some(path) = rfd::FileDialog::new()
@@ -54,7 +54,7 @@ pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     {
         let path = if path.extension().is_some() { path } else { path.with_extension(ext) };
         if let Err(e) = save_image_with_config(img, &path, config.format, config.jpeg_quality) {
-            eprintln!("Failed to save image: {}", e);
+            eprintln!("Failed to save image: {e}");
         }
         return Ok(true);
     }
@@ -70,7 +70,7 @@ pub fn pick_save_path(default_name: &str, filter_label: &str, ext: &str) -> Opti
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {}", e))
+    webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {e}"))
 }
 
 static REQWEST_CLIENT: once_cell::sync::Lazy<reqwest::blocking::Client> =
@@ -88,7 +88,7 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
         .part("fileToUpload", reqwest::blocking::multipart::Part::bytes(bytes)
-            .file_name(format!("screenshot.{}", ext))
+            .file_name(format!("screenshot.{ext}"))
             .mime_str(mime)?);
 
     let resp = REQWEST_CLIENT.post("https://catbox.moe/user/api.php")
@@ -96,8 +96,8 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
         .send()?;
 
     if !resp.status().is_success() {
-        let err_body = resp.text().unwrap_or_else(|e| format!("Failed to read error body: {}", e));
-        return Err(anyhow!("Host failed: {}", err_body));
+        let err_body = resp.text().unwrap_or_else(|e| format!("Failed to read error body: {e}"));
+        return Err(anyhow!("Host failed: {err_body}"));
     }
 
     Ok(resp.text()?)
@@ -106,9 +106,9 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
 pub fn google_search(img: &DynamicImage) -> Result<()> {
     println!("Uploading for Google Search...");
     let direct_url = upload_to_anonymous_host(img)?;
-    println!("Image hosted at: {}", direct_url);
+    println!("Image hosted at: {direct_url}");
 
-    let search_url = format!("https://lens.google.com/uploadbyurl?url={}", direct_url);
+    let search_url = format!("https://lens.google.com/uploadbyurl?url={direct_url}");
     open_url(&search_url)?;
     Ok(())
 }
@@ -281,7 +281,7 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
 
     let mut api = TESS_ENGINE
         .lock()
-        .map_err(|e| anyhow!("Tesseract lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Tesseract lock poisoned: {e}"))?;
 
     api.set_image(
         frame_data,
@@ -290,19 +290,19 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
         1,            // bytes_per_pixel (grayscale)
         width as i32, // bytes_per_line
     )
-    .map_err(|e| anyhow!("Tesseract set_image failed: {:?}", e))?;
+    .map_err(|e| anyhow!("Tesseract set_image failed: {e:?}"))?;
     api.set_source_resolution(300); // 300 DPI for printed text
-    api.recognize().map_err(|e| anyhow!("Tesseract recognize failed: {:?}", e))?;
+    api.recognize().map_err(|e| anyhow!("Tesseract recognize failed: {e:?}"))?;
     let raw = api
         .get_utf8_text()
-        .map_err(|e| anyhow!("Tesseract get_text failed: {:?}", e))?;
+        .map_err(|e| anyhow!("Tesseract get_text failed: {e:?}"))?;
     let text = raw.as_ref().to_string_lossy().into_owned();
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
         Err(anyhow!("No text detected"))
     } else {
-        Ok(fix_ocr_slashed_zero(&trimmed))
+        Ok(fix_ocr_slashed_zero(trimmed))
     }
 }
 
@@ -328,17 +328,14 @@ static TTS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<Option<tts::Tts>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
 
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
-    let text = match image_to_text(img) {
-        Ok(text) => text,
-        Err(err) => return Err(err),
-    };
+    let text = image_to_text(img)?;
     let normalized = normalize_tts_text(&text);
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("No text detected"));
     }
 
-    let mut guard = TTS_ENGINE.lock().map_err(|e| anyhow!("TTS lock poisoned: {}", e))?;
+    let mut guard = TTS_ENGINE.lock().map_err(|e| anyhow!("TTS lock poisoned: {e}"))?;
     let Some(ref mut tts) = *guard else {
         return Err(anyhow!("TTS not available on this system"));
     };
@@ -372,7 +369,7 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
         let _ = tts.set_volume(vol);
     }
 
-    tts.speak(trimmed, true).map_err(|e| anyhow!("TTS speak: {:?}", e))?;
+    tts.speak(trimmed, true).map_err(|e| anyhow!("TTS speak: {e:?}"))?;
     drop(guard);
 
     while {
@@ -405,7 +402,7 @@ fn normalize_tts_text(text: &str) -> String {
 pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
     println!("Uploading image...");
     let img_url = upload_to_anonymous_host(img)?;
-    println!("Image host link: {}", img_url);
+    println!("Image host link: {img_url}");
 
     println!("Registering with Lightshot API...");
     let payload = json!({
@@ -426,7 +423,7 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
 
     let api_json: serde_json::Value = api_resp.json()?;
     let prnt_url = api_json["result"]["url"].as_str()
-        .ok_or_else(|| anyhow!("Lightshot API failed: {:?}", api_json))?;
+        .ok_or_else(|| anyhow!("Lightshot API failed: {api_json:?}"))?;
 
     Ok(prnt_url.to_string())
 }
@@ -473,16 +470,16 @@ pub fn print_image_to(
         use winprint::ticket::{FeatureOptionPack, FeatureOptionPackWithPredefined};
         use winprint::ticket::{PredefinedPageOrientation, PredefinedPageOutputColor};
 
-        let devices = PrinterDevice::all().map_err(|e| anyhow!("List printers: {:?}", e))?;
+        let devices = PrinterDevice::all().map_err(|e| anyhow!("List printers: {e:?}"))?;
         let device = devices
             .into_iter()
             .find(|d| d.name() == printer_name)
-            .ok_or_else(|| anyhow!("Printer not found: {}", printer_name))?;
+            .ok_or_else(|| anyhow!("Printer not found: {printer_name}"))?;
 
         let capabilities = PrintCapabilities::fetch(&device)
-            .map_err(|e| anyhow!("Fetch capabilities: {:?}", e))?;
+            .map_err(|e| anyhow!("Fetch capabilities: {e:?}"))?;
 
-        let mut builder = PrintTicketBuilder::new(&device).map_err(|e| anyhow!("Print ticket: {:?}", e))?;
+        let mut builder = PrintTicketBuilder::new(&device).map_err(|e| anyhow!("Print ticket: {e:?}"))?;
 
         builder.merge(Copies(copies.clamp(1, 9999) as u16))?;
 
@@ -517,11 +514,11 @@ pub fn print_image_to(
             }
         }
 
-        let ticket = builder.build().map_err(|e| anyhow!("Build ticket: {:?}", e))?;
+        let ticket = builder.build().map_err(|e| anyhow!("Build ticket: {e:?}"))?;
         let printer = ImagePrinter::new(device);
         printer
             .print(&temp_path, ticket)
-            .map_err(|e| anyhow!("Print: {:?}", e))?;
+            .map_err(|e| anyhow!("Print: {e:?}"))?;
         Ok(())
     }
 }
