@@ -134,7 +134,7 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
             rect.right = (rect.right - 2).max(rect.left);
             rect.bottom = (rect.bottom - 2).max(rect.top);
         }
-// Trim 1 pixel on each side around the entire edge
+        // Trim 1 pixel on each side around the entire edge
         let left = rect.left + 1;
         let top = rect.top + 1;
         let right = (rect.right - 1).max(left);

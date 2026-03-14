@@ -20,8 +20,6 @@ fn main() {
         }
     }
 
-#[cfg(windows)]
-{
     // Convert icon.png to .ico for Windows exe
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let icon_png = manifest_dir.join("src").join("icon").join("icon.png");
@@ -75,5 +73,4 @@ fn main() {
         eprintln!("winres: {}", e);
         std::process::exit(1);
     }
-}
 }

@@ -1,5 +1,5 @@
 #![cfg(windows)]
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 mod capture;
 mod hotkey;
