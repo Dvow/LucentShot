@@ -19,7 +19,7 @@ debug = false
 
 [dependencies]
 arboard = "3.4"
-eframe = "0.27"
+eframe = { version = "0.27", default-features = false, features = ["accesskit", "default_fonts", "glow", "web_screen_reader", "x11"] }
 image = "0.24"
 reqwest = { version = "0.12", features = ["json", "multipart", "blocking"] }
 rfd = "0.15"
