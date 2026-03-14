@@ -8,13 +8,8 @@ use crate::config::{Shape, Tool};
 fn font() -> &'static Font<'static> {
     static FONT: OnceLock<Font<'static>> = OnceLock::new();
     FONT.get_or_init(|| {
-        #[cfg(windows)]
-        let path = std::path::Path::new(r"C:\Windows\Fonts\arial.ttf");
-        #[cfg(not(windows))]
-        let path = std::path::Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
-        let font_data = std::fs::read(path).expect("Failed to load Arial font");
-        let leaked: &'static [u8] = Box::leak(font_data.into_boxed_slice());
-        Font::try_from_bytes(leaked).expect("Error constructing Font")
+        let font_data = include_bytes!("C:\\Windows\\Fonts\\arial.ttf");
+        Font::try_from_bytes(font_data as &[u8]).expect("Error constructing Font")
     })
 }
 

@@ -1,7 +1,5 @@
 use arboard::{Clipboard, ImageData};
-use image::DynamicImage;
-#[cfg(feature = "ocr")]
-use image::imageops::FilterType;
+use image::{DynamicImage, imageops::FilterType};
 use image::codecs::jpeg::JpegEncoder;
 use rfd::FileDialog;
 use anyhow::{Result, anyhow};
@@ -157,36 +155,35 @@ pub fn open_url(url: &str) -> Result<()> {
 
 fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
     let config = crate::config::cfg();
-    let (bytes, ext, mime_str) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
+    let (bytes, ext, mime) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
 
-    use ureq_multipart::MultipartBuilder;
-    use std::io::Cursor;
-    let mut cursor = Cursor::new(&bytes);
-    let content_type: mime::Mime = mime_str.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
-    let (content_type_header, data) = MultipartBuilder::new()
-        .add_text("reqtype", "fileupload")
-        .map_err(|e| anyhow!("Multipart add_text failed: {}", e))?
-        .add_stream(&mut cursor, "fileToUpload", Some(&format!("screenshot.{}", ext)), Some(content_type))
-        .map_err(|e| anyhow!("Multipart add_stream failed: {}", e))?
-        .finish()
-        .map_err(|e| anyhow!("Multipart finish failed: {}", e))?;
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()?;
 
-    let resp = ureq::post("https://catbox.moe/user/api.php")
-        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .set("Content-Type", &content_type_header)
-        .send_bytes(&data)
-        .map_err(|e| anyhow!("Upload failed: {}", e))?;
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("reqtype", "fileupload")
+        .part("fileToUpload", reqwest::blocking::multipart::Part::bytes(bytes)
+            .file_name(format!("screenshot.{}", ext))
+            .mime_str(mime)?);
 
-    if resp.status() != 200 {
-        let err_body = resp.into_string().unwrap_or_else(|e| format!("{}", e));
+    let resp = client.post("https://catbox.moe/user/api.php")
+        .multipart(form)
+        .send()?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().unwrap_or_else(|e| format!("Failed to read error body: {}", e));
         return Err(anyhow!("Host failed: {}", err_body));
     }
 
-    resp.into_string().map_err(|e| anyhow!("Failed to read response: {}", e))
+    Ok(resp.text()?)
 }
 
 pub fn google_search(img: &DynamicImage) -> Result<()> {
+    println!("Uploading for Google Search...");
     let direct_url = upload_to_anonymous_host(img)?;
+    println!("Image hosted at: {}", direct_url);
+
     let search_url = format!("https://lens.google.com/uploadbyurl?url={}", direct_url);
     open_url(&search_url)?;
     Ok(())
@@ -209,18 +206,12 @@ pub fn show_ocr_error(_msg: &str) {
     eprintln!("OCR Error: {}", _msg);
 }
 
-#[cfg_attr(not(feature = "ocr"), allow(unused_variables))]
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
-    #[cfg(feature = "ocr")]
-    return image_to_text_tesseract(img);
-    #[cfg(not(feature = "ocr"))]
-    Err(anyhow!("OCR not built in. Build with --features ocr"))
+    image_to_text_tesseract(img)
 }
 
-#[cfg(feature = "ocr")]
 const OCR_SCALE: u32 = 3;
 
-#[cfg(feature = "ocr")]
 /// Preprocess image for OCR: 3x upscale, grayscale, binarize (Otsu).
 fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     use imageproc::contrast;
@@ -245,33 +236,23 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     contrast::threshold(&gray, level)
 }
 
-#[cfg(feature = "ocr")]
-/// Tessdata path — looked up at runtime from exe dir or current dir (not embedded; saves ~15MB).
+/// Tessdata embedded at compile time — zero disk reads for the model file at build.
+static ENG_TRAINEDDATA: &[u8] = include_bytes!("../tessdata/eng.traineddata");
+
+/// Tessdata path — extracted once to temp at first use.
 static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
     once_cell::sync::Lazy::new(|| {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(std::path::PathBuf::from));
-        let candidates = [
-            exe_dir.as_ref().map(|d| d.join("tessdata")),
-            std::env::current_dir().ok().map(|d| d.join("tessdata")),
-        ];
-        for dir in candidates.into_iter().flatten() {
-            if dir.join("eng.traineddata").exists() {
-                return dir;
-            }
-        }
-        panic!(
-            "tessdata/eng.traineddata not found. Place it next to the exe (exe_dir/tessdata/) or in current dir."
-        );
+        let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
+        std::fs::create_dir_all(&tess_dir).expect("Failed to create tessdata dir");
+        std::fs::write(tess_dir.join("eng.traineddata"), ENG_TRAINEDDATA)
+            .expect("Failed to write eng.traineddata");
+        tess_dir
     });
 
-#[cfg(feature = "ocr")]
+/// Reusable Tesseract instance — initialized once, reused for all OCR calls (30–80ms per image).
 use tesseract_static::tesseract_plumbing::TessBaseApi;
-#[cfg(feature = "ocr")]
 use std::ffi::CString;
 
-#[cfg(feature = "ocr")]
 static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
     once_cell::sync::Lazy::new(|| {
         let mut api = TessBaseApi::create();
@@ -286,7 +267,6 @@ static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
         std::sync::Mutex::new(api)
     });
 
-#[cfg(feature = "ocr")]
 /// Pre-warms the engine at startup — forces TESS_ENGINE init in background.
 pub fn warm_ocr_engine() {
     std::thread::spawn(|| {
@@ -294,10 +274,6 @@ pub fn warm_ocr_engine() {
     });
 }
 
-#[cfg(not(feature = "ocr"))]
-pub fn warm_ocr_engine() {}
-
-#[cfg(feature = "ocr")]
 /// OCR using the shared TessBaseApi — ~30–80ms per image (model stays in memory).
 fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     let gray = preprocess_for_ocr(img);
@@ -331,7 +307,6 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     }
 }
 
-#[cfg(feature = "ocr")]
 /// Fix slashed zero misreads: replace € or @ with 0 when they appear in a numeric context.
 fn fix_ocr_slashed_zero(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -349,61 +324,54 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
     out
 }
 
-#[cfg_attr(not(feature = "ocr"), allow(unused_variables))]
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    return Err(anyhow!("Image-to-Speech requires OCR. Build with --features ocr"));
-
-    #[cfg(feature = "ocr")]
-    {
-        let text = match image_to_text(img) {
-            Ok(text) => text,
-            Err(err) => {
-                let log_path = std::env::temp_dir().join("lightshotv2_tts_error.txt");
-                let _ = fs::write(&log_path, format!("{}", err));
-                return Err(err);
-            }
-        };
-        let normalized = normalize_tts_text(&text);
-        let trimmed = normalized.trim();
-        if trimmed.is_empty() {
-            return Err(anyhow!("No text detected"));
+    let text = match image_to_text(img) {
+        Ok(text) => text,
+        Err(err) => {
+            let log_path = std::env::temp_dir().join("lightshotv2_tts_error.txt");
+            let _ = fs::write(&log_path, format!("{}", err));
+            return Err(err);
         }
-        let path = std::env::temp_dir().join("lightshotv2_tts.txt");
-        fs::write(&path, trimmed)?;
-        let settings = crate::config::cfg();
-
-        #[cfg(target_os = "windows")]
-        {
-            let voice_part = if settings.tts_voice.trim().is_empty() {
-                String::new()
-            } else {
-                let escaped = settings.tts_voice.trim().replace("'", "''");
-                format!("$s.SelectVoice('{}'); ", escaped)
-            };
-            let script = format!(
-                "Add-Type -AssemblyName System.Speech; \
-                 $t = Get-Content -Raw -Path '{}'; \
-                 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-                 {}; \
-                 $s.Rate = {}; \
-                 $s.Volume = {}; \
-                 $s.Speak($t);",
-                path.display().to_string().replace("'", "''")
-                ,voice_part
-                ,settings.tts_rate
-                ,settings.tts_volume
-            );
-            run_tts_powershell_silent(&script)?;
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            return Err(anyhow!("Image to speech is only supported on Windows"));
-        }
-
-        Ok(())
+    };
+    let normalized = normalize_tts_text(&text);
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("No text detected"));
     }
+    let path = std::env::temp_dir().join("lightshotv2_tts.txt");
+    fs::write(&path, trimmed)?;
+    let settings = crate::config::cfg();
+
+    #[cfg(target_os = "windows")]
+    {
+        let voice_part = if settings.tts_voice.trim().is_empty() {
+            String::new()
+        } else {
+            let escaped = settings.tts_voice.trim().replace("'", "''");
+            format!("$s.SelectVoice('{}'); ", escaped)
+        };
+        let script = format!(
+            "Add-Type -AssemblyName System.Speech; \
+             $t = Get-Content -Raw -Path '{}'; \
+             $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+             {}; \
+             $s.Rate = {}; \
+             $s.Volume = {}; \
+             $s.Speak($t);",
+            path.display().to_string().replace("'", "''")
+            ,voice_part
+            ,settings.tts_rate
+            ,settings.tts_volume
+        );
+        run_tts_powershell_silent(&script)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err(anyhow!("Image to speech is only supported on Windows"));
+    }
+
+    Ok(())
 }
 
 /// Returns installed Windows TTS voice names. Empty on non-Windows or if listing fails.
@@ -427,10 +395,10 @@ pub fn get_tts_voices() -> Vec<String> {
     Vec::new()
 }
 
-#[cfg(all(target_os = "windows", feature = "ocr"))]
+#[cfg(target_os = "windows")]
 static TTS_PROCESS: std::sync::OnceLock<std::sync::RwLock<Option<windows::Win32::Foundation::HANDLE>>> = std::sync::OnceLock::new();
 
-#[cfg(all(target_os = "windows", feature = "ocr"))]
+#[cfg(target_os = "windows")]
 fn run_tts_powershell_silent(script: &str) -> Result<()> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
@@ -506,14 +474,20 @@ fn run_tts_powershell_silent(script: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "ocr")]
 fn normalize_tts_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
+    println!("Uploading image...");
     let img_url = upload_to_anonymous_host(img)?;
+    println!("Image host link: {}", img_url);
 
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()?;
+
+    println!("Registering with Lightshot API...");
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "save",
@@ -526,13 +500,11 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
         }
     });
 
-    let api_resp = ureq::post("https://api.prntscr.com/v1/")
-        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .send_json(payload)
-        .map_err(|e| anyhow!("Lightshot API request failed: {}", e))?;
+    let api_resp = client.post("https://api.prntscr.com/v1/")
+        .json(&payload)
+        .send()?;
 
-    let api_json: serde_json::Value = api_resp.into_json()
-        .map_err(|e| anyhow!("Lightshot API response parse failed: {}", e))?;
+    let api_json: serde_json::Value = api_resp.json()?;
     let prnt_url = api_json["result"]["url"].as_str()
         .ok_or_else(|| anyhow!("Lightshot API failed: {:?}", api_json))?;
 

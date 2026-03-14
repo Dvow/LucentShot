@@ -30,7 +30,7 @@ lazy_static! {
         #[cfg(target_os = "windows")]
         const TESSERACT_FILENAME: &str = "tesseract.dll";
 
-        // 1. Write to system temp dir (no residue next to exe)
+        // 1. Choose/write the library files to the system temp directory:
         let tempdir = std::env::temp_dir().join("lightshotv2_tesseract");
         
         fs::create_dir_all(&tempdir)
