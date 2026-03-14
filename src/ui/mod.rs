@@ -243,6 +243,7 @@ fn capture_hotkey_input(
         }
     });
 
+    #[cfg(windows)]
     if next_key.is_none() {
         let snapshot_down = unsafe {
             (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
