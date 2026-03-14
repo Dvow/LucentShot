@@ -128,7 +128,6 @@ pub enum HotkeyEvent {
 
 #[derive(Clone)]
 pub struct HotkeyHandle {
-    #[cfg(windows)]
     thread_id: u32,
     config: std::sync::Arc<std::sync::Mutex<HotkeyConfig>>,
     listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -139,27 +138,21 @@ impl HotkeyHandle {
         if let Ok(mut guard) = self.config.lock() {
             *guard = config;
         }
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::{LPARAM, WPARAM};
-            use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-            const MSG_UPDATE_CONFIG: u32 = 0x8001;
-            unsafe {
-                let _ = PostThreadMessageW(self.thread_id, MSG_UPDATE_CONFIG, WPARAM(0), LPARAM(0));
-            }
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+        const MSG_UPDATE_CONFIG: u32 = 0x8001;
+        unsafe {
+            let _ = PostThreadMessageW(self.thread_id, MSG_UPDATE_CONFIG, WPARAM(0), LPARAM(0));
         }
     }
 
     pub fn set_listening(&self, listen: bool) {
         self.listening.store(listen, std::sync::atomic::Ordering::SeqCst);
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::{LPARAM, WPARAM};
-            use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-            const MSG_SET_LISTENING: u32 = 0x8002;
-            unsafe {
-                let _ = PostThreadMessageW(self.thread_id, MSG_SET_LISTENING, WPARAM(0), LPARAM(0));
-            }
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+        const MSG_SET_LISTENING: u32 = 0x8002;
+        unsafe {
+            let _ = PostThreadMessageW(self.thread_id, MSG_SET_LISTENING, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -172,44 +165,6 @@ pub fn start_low_level_hotkey_loop(
 ) -> HotkeyHandle {
     let config = std::sync::Arc::new(std::sync::Mutex::new(initial_config));
     let listening = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    #[cfg(windows)]
-    {
-        start_low_level_hotkey_loop_windows(ctx, trigger_flag, event_tx, config.clone(), listening.clone())
-    }
-
-    #[cfg(not(windows))]
-    {
-        // Linux: no global hotkeys. Keep event_tx alive so hotkey_rx stays open for overlay.
-        let config_thread = config.clone();
-        let listening_thread = listening.clone();
-        std::thread::spawn(move || {
-            let guard = (ctx, trigger_flag, event_tx, config_thread, listening_thread);
-            std::thread::park();
-            drop(guard);
-        });
-        // Ensure all variants exist for overlay's exhaustive match on hotkey_rx
-        debug_assert_eq!(
-            [
-                HotkeyEvent::InstantSave,
-                HotkeyEvent::InstantUpload,
-                HotkeyEvent::CopyFocusedWindow,
-            ]
-            .len(),
-            3
-        );
-        HotkeyHandle { config, listening }
-    }
-}
-
-#[cfg(windows)]
-fn start_low_level_hotkey_loop_windows(
-    ctx: egui::Context,
-    trigger_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    event_tx: std::sync::mpsc::Sender<HotkeyEvent>,
-    config: std::sync::Arc<std::sync::Mutex<HotkeyConfig>>,
-    listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> HotkeyHandle {
     use std::sync::atomic::Ordering;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
@@ -225,7 +180,7 @@ fn start_low_level_hotkey_loop_windows(
         unsafe {
             let thread_id = GetCurrentThreadId();
             let _ = tx.send(thread_id);
-            apply_hotkey_config(&config_thread, &listening_thread);
+            apply_hotkey_config(&config_thread, &*listening_thread);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -248,7 +203,7 @@ fn start_low_level_hotkey_loop_windows(
                         _ => {}
                     }
                 } else if msg.message == MSG_UPDATE_CONFIG || msg.message == MSG_SET_LISTENING {
-                    apply_hotkey_config(&config_thread, &listening_thread);
+                    apply_hotkey_config(&config_thread, &*listening_thread);
                 }
             }
         }
@@ -262,7 +217,6 @@ fn start_low_level_hotkey_loop_windows(
     }
 }
 
-#[cfg(windows)]
 fn apply_hotkey_config(
     config: &std::sync::Arc<std::sync::Mutex<HotkeyConfig>>,
     listening: &std::sync::atomic::AtomicBool,
@@ -296,7 +250,6 @@ fn apply_hotkey_config(
     }
 }
 
-#[cfg(windows)]
 fn register_hotkey(id: u32, binding: HotkeyBinding) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         RegisterHotKey,
@@ -311,7 +264,6 @@ fn register_hotkey(id: u32, binding: HotkeyBinding) {
     }
 }
 
-#[cfg(windows)]
 fn egui_modifiers_to_win(mods: egui::Modifiers) -> windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,

@@ -432,26 +432,20 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
 }
 
 pub fn get_printers() -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        use winprint::printer::PrinterDevice;
-        match PrinterDevice::all() {
-            Ok(devices) => {
-                let names: Vec<String> = devices.into_iter().map(|d| d.name().to_string()).collect();
-                if names.is_empty() {
-                    vec!["Microsoft Print to PDF".to_string()]
-                } else {
-                    names
-                }
+    use winprint::printer::PrinterDevice;
+    match PrinterDevice::all() {
+        Ok(devices) => {
+            let names: Vec<String> = devices.into_iter().map(|d| d.name().to_string()).collect();
+            if names.is_empty() {
+                vec!["Microsoft Print to PDF".to_string()]
+            } else {
+                names
             }
-            Err(_) => vec!["Microsoft Print to PDF".to_string()],
         }
+        Err(_) => vec!["Microsoft Print to PDF".to_string()],
     }
-    #[cfg(not(target_os = "windows"))]
-    Vec::new()
 }
 
-#[cfg(target_os = "windows")]
 fn paper_size_to_predefined(paper: &str) -> Option<winprint::ticket::PredefinedMediaName> {
     match paper.trim() {
         "A4" => Some(winprint::ticket::PredefinedMediaName::ISOA4),
@@ -473,13 +467,6 @@ pub fn print_image_to(
     let temp_path = std::env::temp_dir().join("lightshot_print.png");
     img.save(&temp_path)?;
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (printer_name, copies, landscape, grayscale, paper_size);
-        return Err(anyhow!("Printing is only supported on Windows"));
-    }
-
-    #[cfg(target_os = "windows")]
     {
         use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
         use winprint::ticket::{Copies, PrintCapabilities, PrintTicketBuilder};

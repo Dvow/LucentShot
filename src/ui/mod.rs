@@ -209,11 +209,6 @@ fn capture_hotkey_input(
         return;
     }
 
-    #[cfg(not(windows))]
-    {
-        *last_snapshot_down = false;
-    }
-
     let mut next_key: Option<u32> = None;
     let mut next_ctrl = None;
     let mut next_shift = None;
@@ -248,7 +243,6 @@ fn capture_hotkey_input(
         }
     });
 
-    #[cfg(windows)]
     if next_key.is_none() {
         let snapshot_down = unsafe {
             (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(

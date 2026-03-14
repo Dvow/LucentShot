@@ -1,7 +1,6 @@
 //! Windows toast notifications via tauri-winrt-notification.
 //! Uses PowerShell AppUserModelID for unpackaged apps (toast header shows "PowerShell").
 
-#[cfg(target_os = "windows")]
 pub fn show(title: &str, body: &str) {
     use std::path::Path;
     use std::sync::OnceLock;
@@ -24,9 +23,4 @@ pub fn show(title: &str, body: &str) {
     if let Err(e) = toast.show() {
         eprintln!("Notification failed: {}", e);
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn show(_title: &str, _body: &str) {
-    // Toast notifications are Windows-only; enable tauri-winrt-notification for other platforms if needed
 }

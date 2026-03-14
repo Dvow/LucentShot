@@ -8,7 +8,6 @@ pub struct RawCapture {
 }
 
 /// Virtual screen bounds: (x, y, width, height) covering all monitors.
-#[cfg(target_os = "windows")]
 pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -22,34 +21,6 @@ pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
-    use xcap::Monitor;
-    if let Ok(monitors) = Monitor::all() {
-        let mut min_x = 0i32;
-        let mut min_y = 0i32;
-        let mut max_x = 0i32;
-        let mut max_y = 0i32;
-        for m in &monitors {
-            let x = m.x().unwrap_or(0);
-            let y = m.y().unwrap_or(0);
-            let w = m.width().unwrap_or(0) as i32;
-            let h = m.height().unwrap_or(0) as i32;
-            if w > 0 && h > 0 {
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x + w);
-                max_y = max_y.max(y + h);
-            }
-        }
-        if max_x > min_x && max_y > min_y {
-            return (min_x, min_y, max_x - min_x, max_y - min_y);
-        }
-    }
-    (0, 0, 1920, 1080)
-}
-
-#[cfg(target_os = "windows")]
 pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     use windows::Win32::Graphics::Gdi::{
         GetDC, ReleaseDC, CreateCompatibleDC, CreateCompatibleBitmap, 
@@ -131,7 +102,6 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
     }
 }
 
-#[cfg(target_os = "windows")]
 pub fn capture_focused_window_raw() -> Result<RawCapture> {
     use windows::Win32::Graphics::Gdi::{
         GetDC, ReleaseDC, CreateCompatibleDC, CreateCompatibleBitmap,
@@ -218,31 +188,6 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
             pixels: buffer,
         })
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn capture_primary_screen_raw(_include_cursor: bool) -> Result<RawCapture> {
-    use xcap::Monitor;
-    let monitors = Monitor::all().map_err(|e| anyhow::anyhow!("Monitor::all: {:?}", e))?;
-    let monitor = monitors
-        .into_iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .or_else(|| {
-            Monitor::all().ok().and_then(|m| m.into_iter().next())
-        })
-        .ok_or_else(|| anyhow::anyhow!("No monitor found"))?;
-    let cap = monitor.capture_image().map_err(|e| anyhow::anyhow!("Capture: {:?}", e))?;
-    let (w, h) = (cap.width() as i32, cap.height() as i32);
-    let mut pixels = cap.as_raw().to_vec();
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.swap(0, 2);
-    }
-    Ok(RawCapture { width: w, height: h, pixels })
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn capture_focused_window_raw() -> Result<RawCapture> {
-    Err(anyhow::anyhow!("Focused window capture is Windows-only"))
 }
 
 pub fn raw_to_color_image(raw: RawCapture) -> ColorImage {

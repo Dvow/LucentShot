@@ -1,3 +1,4 @@
+#![cfg(windows)]
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod capture;
@@ -62,24 +63,6 @@ fn main() {
     actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
     let tray_icon = load_tray_icon();
 
-    #[cfg(target_os = "linux")]
-    {
-        // tray-icon on Linux needs GTK; eframe doesn't use it, so run tray in its own thread
-        std::thread::spawn(move || {
-            gtk::init().expect("GTK init failed");
-            let tray_menu = build_tray_menu();
-            let _tray = TrayIconBuilder::new()
-                .with_menu(Box::new(tray_menu))
-                .with_menu_on_left_click(false)
-                .with_tooltip("Lightshot Clone - Left-click to screenshot")
-                .with_icon(tray_icon)
-                .build()
-                .expect("Tray icon build failed");
-            gtk::main();
-        });
-    }
-
-    #[cfg(not(target_os = "linux"))]
     let _tray = {
         let tray_menu = build_tray_menu();
         TrayIconBuilder::new()
@@ -92,14 +75,12 @@ fn main() {
     };
 
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
-    // Disable transparency on Linux when GPU lacks support (e.g. VMware)
-    let transparent = cfg!(not(target_os = "linux"));
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
         .with_visible(true)
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
-        .with_transparent(transparent);
+        .with_transparent(true);
     if let Some(ref icon) = icon_data {
         viewport = viewport.with_icon(Arc::new(icon.clone()));
     }
