@@ -212,9 +212,91 @@ pub fn image_to_text(img: &DynamicImage) -> Result<String> {
 
 const OCR_SCALE: u32 = 3;
 
-/// Preprocess image for OCR: 3x upscale, grayscale, binarize (Otsu).
+/// Minimum skew angle (degrees) to trigger deskew — avoids rotating for nearly-straight text.
+const DESKEW_THRESHOLD_DEG: f32 = 0.8;
+
+/// Detect skew angle using horizontal projection variance — when text lines are horizontal,
+/// row sums have high variance; when skewed, variance drops. Returns angle in degrees
+/// (positive = clockwise correction needed).
+fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
+    use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+
+    let (w, h) = binary.dimensions();
+    if w < 20 || h < 20 {
+        return 0.0;
+    }
+
+    // Sample angles from -45° to +45° in 3° steps (handles significantly tilted text)
+    let mut best_angle = 0.0f32;
+    let mut best_variance = 0.0f64;
+
+    for deg in (-45..=45).step_by(3) {
+        let theta = (deg as f32).to_radians();
+        let rotated = rotate_about_center(
+            binary,
+            theta,
+            Interpolation::Bilinear,
+            image::Luma([255u8]), // white fill for background
+        );
+
+        // Horizontal projection: sum of pixels per row (0 = black, 255 = white; we want low where text)
+        let mut row_sums: Vec<u64> = vec![0; rotated.height() as usize];
+        for y in 0..rotated.height() {
+            for x in 0..rotated.width() {
+                let p = rotated.get_pixel(x, y)[0];
+                row_sums[y as usize] += p as u64;
+            }
+        }
+
+        // Variance of row sums — maximized when text lines are horizontal
+        let mean = row_sums.iter().sum::<u64>() as f64 / row_sums.len() as f64;
+        let variance = row_sums
+            .iter()
+            .map(|&s| {
+                let d = s as f64 - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / row_sums.len() as f64;
+
+        if variance > best_variance {
+            best_variance = variance;
+            best_angle = deg as f32;
+        }
+    }
+
+    best_angle
+}
+
+/// Deskew image by rotating to correct for detected skew.
+fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
+    use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+
+    if angle_deg.abs() < DESKEW_THRESHOLD_DEG {
+        return img.clone();
+    }
+
+    let gray = img.to_luma8();
+    let theta = angle_deg.to_radians();
+    let rotated = rotate_about_center(
+        &gray,
+        theta,
+        Interpolation::Bilinear,
+        image::Luma([255u8]),
+    );
+    DynamicImage::ImageLuma8(rotated)
+}
+
+/// Preprocess image for OCR: deskew, 3x upscale, grayscale, binarize (Otsu).
 fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     use imageproc::contrast;
+
+    // 0. Deskew: detect and correct rotation so Tesseract sees horizontal text
+    let gray0 = img.to_luma8();
+    let level0 = contrast::otsu_level(&gray0);
+    let binary0 = contrast::threshold(&gray0, level0);
+    let skew_angle = detect_skew_angle(&binary0);
+    let img = deskew_image(img, skew_angle);
 
     // 1. Always 3x upscale
     let w = img.width();
