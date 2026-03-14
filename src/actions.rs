@@ -1,288 +1,80 @@
+use arboard::{Clipboard, ImageData};
 use image::{DynamicImage, imageops::FilterType};
 use image::codecs::jpeg::JpegEncoder;
 use anyhow::{Result, anyhow};
-use std::time::{Duration, SystemTime};
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::fs;
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use serde_json::json;
 
 pub enum CopyResult {
     Image,
-    File,
 }
 
 pub fn copy_to_clipboard(
     img: &DynamicImage,
-    format: crate::config::ImageFormat,
-    jpeg_quality: u8,
+    _format: crate::config::ImageFormat,
+    _jpeg_quality: u8,
 ) -> Result<CopyResult> {
-    if matches!(format, crate::config::ImageFormat::Png) {
-        return copy_image_to_clipboard(img).map(|_| CopyResult::Image);
-    }
-
-    let path = save_temp_image(img, format, jpeg_quality)?;
-    #[cfg(target_os = "windows")]
-    {
-        set_clipboard_file(&path)?;
-        return Ok(CopyResult::File);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err(anyhow!("Clipboard only supported on Windows"))
-    }
-}
-
-/// Set plain text on clipboard (Windows API). Public for OCR/URL copy.
-#[cfg(target_os = "windows")]
-pub fn set_clipboard_text(text: &str) -> Result<()> {
-    set_clipboard_text_win32(text)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn set_clipboard_text(_text: &str) -> Result<()> {
-    Err(anyhow!("Clipboard only supported on Windows"))
-}
-
-#[cfg(target_os = "windows")]
-fn set_clipboard_text_win32(text: &str) -> Result<()> {
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
-    };
-    const CF_UNICODETEXT: u32 = 13;
-
-    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let byte_len = wide.len() * 2;
-
-    unsafe {
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, byte_len)
-            .map_err(|_| anyhow!("Failed to allocate clipboard memory"))?;
-        let ptr = GlobalLock(hglobal);
-        if ptr.is_null() {
-            return Err(anyhow!("Failed to lock clipboard memory"));
-        }
-        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, byte_len);
-        let _ = GlobalUnlock(hglobal);
-
-        OpenClipboard(None).map_err(|_| anyhow!("Failed to open clipboard"))?;
-        let _ = EmptyClipboard();
-        if SetClipboardData(CF_UNICODETEXT, windows::Win32::Foundation::HANDLE(hglobal.0 as _)).is_err() {
-            let _ = CloseClipboard();
-            return Err(anyhow!("Failed to set clipboard text"));
-        }
-        let _ = CloseClipboard();
-    }
-    Ok(())
-}
-
-fn copy_image_to_clipboard(img: &DynamicImage) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        set_clipboard_image_win32(img)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = img;
-        Err(anyhow!("Image clipboard only supported on Windows"))
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn set_clipboard_image_win32(img: &DynamicImage) -> Result<()> {
-    use windows::Win32::Graphics::Gdi::{BI_RGB, BITMAPINFOHEADER};
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
-    };
-
-    const CF_DIB: u32 = 8;
-
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let raw = rgba.as_raw();
+    let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Clipboard: {}", e))?;
+    clipboard
+        .set_image(ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(rgba.into_raw()),
+        })
+        .map_err(|e| anyhow!("Clipboard set_image: {}", e))?;
+    Ok(CopyResult::Image)
+}
 
-    // DIB: BITMAPINFOHEADER + pixel data, top-down (negative height), BGRA
-    let header_size = std::mem::size_of::<BITMAPINFOHEADER>();
-    let row_bytes = ((width * 4 + 3) & !3u32) as usize;
-    let image_size = row_bytes * height as usize;
-    let total_size = header_size + image_size;
-
-    unsafe {
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size)
-            .map_err(|_| anyhow!("Failed to allocate clipboard memory"))?;
-        let ptr = GlobalLock(hglobal) as *mut u8;
-        if ptr.is_null() {
-            return Err(anyhow!("Failed to lock clipboard memory"));
-        }
-
-        let bmi = BITMAPINFOHEADER {
-            biSize: header_size as u32,
-            biWidth: width as i32,
-            biHeight: -(height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
-            ..Default::default()
-        };
-        std::ptr::copy_nonoverlapping(&bmi as *const _ as *const u8, ptr, header_size);
-
-        let pixels = ptr.add(header_size);
-        let (w, h) = (width as usize, height as usize);
-        for y in 0..h {
-            for x in 0..w {
-                let src = (y * w + x) * 4;
-                let dst = y * row_bytes + x * 4;
-                pixels.add(dst).write(raw[src + 2]); // B
-                pixels.add(dst + 1).write(raw[src + 1]); // G
-                pixels.add(dst + 2).write(raw[src]);     // R
-                pixels.add(dst + 3).write(raw[src + 3]); // A
-            }
-        }
-
-        let _ = GlobalUnlock(hglobal);
-
-        OpenClipboard(None).map_err(|_| anyhow!("Failed to open clipboard"))?;
-        let _ = EmptyClipboard();
-        if SetClipboardData(CF_DIB, windows::Win32::Foundation::HANDLE(hglobal.0 as _)).is_err() {
-            let _ = CloseClipboard();
-            return Err(anyhow!("Failed to set clipboard image"));
-        }
-        let _ = CloseClipboard();
-    }
-    Ok(())
+pub fn set_clipboard_text(text: &str) -> Result<()> {
+    Clipboard::new()
+        .and_then(|mut c| c.set_text(text.to_owned()))
+        .map_err(|e| anyhow!("Clipboard: {}", e))
 }
 
 pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     let config = crate::config::cfg();
     let (ext, filter_label) = format_extension_and_label(config.format);
+    let start_dir = std::env::var("USERPROFILE")
+        .map(|p| std::path::PathBuf::from(p).join("Pictures"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut i = 1;
     let mut file_name = format!("screenshot_{}.{}", i, ext);
-
-    let start_dir = std::env::var("USERPROFILE")
-        .map(|p| std::path::Path::new(&p).join("Pictures"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
     while start_dir.join(&file_name).exists() {
         i += 1;
         file_name = format!("screenshot_{}.{}", i, ext);
     }
 
-    #[cfg(target_os = "windows")]
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter(filter_label, &[ext])
+        .set_directory(&start_dir)
+        .set_file_name(&file_name)
+        .save_file()
     {
-        if let Some(path) = save_file_dialog_win32(&start_dir, &file_name, filter_label, ext) {
-            let target_path = if path.extension().is_some() {
-                path
-            } else {
-                path.with_extension(ext)
-            };
-            if let Err(e) = save_image_with_config(img, &target_path, config.format, config.jpeg_quality) {
-                eprintln!("Failed to save image: {}", e);
-            }
-            return Ok(true);
+        let path = if path.extension().is_some() { path } else { path.with_extension(ext) };
+        if let Err(e) = save_image_with_config(img, &path, config.format, config.jpeg_quality) {
+            eprintln!("Failed to save image: {}", e);
         }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (img, start_dir, file_name, filter_label, ext);
-        return Err(anyhow!("Save dialog only supported on Windows"));
+        return Ok(true);
     }
     Ok(false)
 }
 
 /// Pick a path to save a file (for config, etc). Returns None if user cancels.
-pub fn pick_save_path(
-    default_name: &str,
-    filter_label: &str,
-    ext: &str,
-) -> Option<std::path::PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        let start_dir = std::env::var("USERPROFILE")
-            .ok()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        save_file_dialog_win32(&start_dir, default_name, filter_label, ext)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (default_name, filter_label, ext);
-        None
-    }
+pub fn pick_save_path(default_name: &str, filter_label: &str, ext: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter(filter_label, &[ext])
+        .set_file_name(default_name)
+        .save_file()
 }
 
-#[cfg(target_os = "windows")]
-fn save_file_dialog_win32(
-    start_dir: &std::path::Path,
-    file_name: &str,
-    filter_label: &str,
-    ext: &str,
-) -> Option<std::path::PathBuf> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::UI::Controls::Dialogs::{GetSaveFileNameW, OPENFILENAMEW, OPEN_FILENAME_FLAGS, OFN_EXPLORER, OFN_PATHMUSTEXIST};
-
-    let filter: Vec<u16> = format!("{}\0*.{}\0All Files (*.*)\0*.*\0", filter_label, ext)
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut file_buf: Vec<u16> = file_name.encode_utf16().chain(std::iter::once(0)).collect();
-    file_buf.resize(260, 0); // MAX_PATH
-    let start_wide: Vec<u16> = start_dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        let mut ofn = OPENFILENAMEW::default();
-        ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
-        ofn.lpstrFilter = windows::core::PCWSTR::from_raw(filter.as_ptr());
-        ofn.lpstrFile = windows::core::PWSTR::from_raw(file_buf.as_mut_ptr());
-        ofn.nMaxFile = file_buf.len() as u32;
-        ofn.lpstrInitialDir = windows::core::PCWSTR::from_raw(start_wide.as_ptr());
-        ofn.Flags = OPEN_FILENAME_FLAGS(OFN_EXPLORER.0 | OFN_PATHMUSTEXIST.0);
-
-        if GetSaveFileNameW(&mut ofn).as_bool() {
-            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
-            let path = String::from_utf16_lossy(&file_buf[..len]);
-            Some(std::path::PathBuf::from(path))
-        } else {
-            None
-        }
-    }
-}
-
-/// Opens a URL in the default browser (Windows: ShellExecuteW).
-#[cfg(target_os = "windows")]
 pub fn open_url(url: &str) -> Result<()> {
-    use std::iter;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
-    use windows::core::PCWSTR;
-
-    let wide: Vec<u16> = url.encode_utf16().chain(iter::once(0)).collect();
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            windows::core::w!("open"),
-            PCWSTR::from_raw(wide.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOW,
-        )
-    };
-    if result.0 as i32 <= 32 {
-        return Err(anyhow!("Failed to open URL (ShellExecuteW returned {})", result.0));
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn open_url(url: &str) -> Result<()> {
-    Err(anyhow!("Opening URLs is only supported on Windows"))
+    webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {}", e))
 }
 
 fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
@@ -882,88 +674,3 @@ fn save_image_with_config(
     Ok(())
 }
 
-pub fn cleanup_old_copy_temp_files() {
-    let temp_dir = std::env::temp_dir().join("lightshotv2");
-    let Ok(entries) = fs::read_dir(&temp_dir) else { return };
-    let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(3600))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-        if !name.starts_with("copy_") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
-        if modified < cutoff {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
-
-fn save_temp_image(
-    img: &DynamicImage,
-    format: crate::config::ImageFormat,
-    jpeg_quality: u8,
-) -> Result<std::path::PathBuf> {
-    let (ext, _) = format_extension_and_label(format);
-    let temp_dir = std::env::temp_dir().join("lightshotv2");
-    fs::create_dir_all(&temp_dir)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let path = temp_dir.join(format!("copy_{}.{}", stamp, ext));
-    save_image_with_config(img, &path, format, jpeg_quality)?;
-    Ok(path)
-}
-
-#[cfg(target_os = "windows")]
-fn set_clipboard_file(path: &std::path::Path) -> Result<()> {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
-    };
-    use windows::Win32::UI::Shell::DROPFILES;
-
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    wide.push(0);
-    wide.push(0);
-
-    let dropfiles_size = std::mem::size_of::<DROPFILES>();
-    let bytes_len = wide.len() * std::mem::size_of::<u16>();
-    let total_size = dropfiles_size + bytes_len;
-
-    const CF_HDROP: u32 = 15;
-    unsafe {
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size)
-            .map_err(|_| anyhow!("Failed to allocate clipboard memory"))?;
-        let ptr = GlobalLock(hglobal);
-        if ptr.is_null() {
-            return Err(anyhow!("Failed to lock clipboard memory"));
-        }
-
-        let ptr = ptr as *mut u8;
-        let dropfiles = ptr as *mut DROPFILES;
-        (*dropfiles).pFiles = dropfiles_size as u32;
-        (*dropfiles).fWide = windows::Win32::Foundation::BOOL::from(true);
-
-        let list_ptr = ptr.add(dropfiles_size) as *mut u16;
-        std::ptr::copy_nonoverlapping(wide.as_ptr(), list_ptr, wide.len());
-        let _ = GlobalUnlock(hglobal);
-
-        OpenClipboard(None).map_err(|_| anyhow!("Failed to open clipboard"))?;
-        let _ = EmptyClipboard();
-        let hdrop = HANDLE(hglobal.0 as _);
-        if SetClipboardData(CF_HDROP, hdrop).is_err() {
-            let _ = CloseClipboard();
-            return Err(anyhow!("Failed to set clipboard file"));
-        }
-        let _ = CloseClipboard();
-    }
-    Ok(())
-}

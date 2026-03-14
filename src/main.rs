@@ -40,7 +40,6 @@ fn load_tray_icon() -> Icon {
 
 fn main() {
     config::init();
-    actions::cleanup_old_copy_temp_files();
     actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
     let tray_icon = load_tray_icon();
 
