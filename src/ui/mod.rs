@@ -113,19 +113,6 @@ fn render_general(ui: &mut egui::Ui, config: &mut ConfigImpl) {
                 }
             });
             ui.end_row();
-
-            ui.label("Language");
-            egui::ComboBox::from_id_source("language_select")
-                .selected_text(&config.general_language)
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut config.general_language,
-                        "English".to_string(),
-                        "English",
-                    );
-                });
-            ui.end_row();
         });
 }
 

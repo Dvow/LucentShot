@@ -2931,7 +2931,6 @@ dependencies = [
  "egui_nerdfonts",
  "image 0.24.9",
  "imageproc",
- "once_cell",
  "reqwest",
  "rfd",
  "rusttype",

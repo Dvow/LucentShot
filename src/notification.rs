@@ -17,7 +17,5 @@ pub fn show(title: &str, body: &str) {
     if path.exists() {
         toast = toast.icon(Path::new(path), IconCrop::Circular, "Lightshot Clone");
     }
-    if let Err(e) = toast.show() {
-        eprintln!("Notification failed: {e}");
-    }
+    let _ = toast.show();
 }

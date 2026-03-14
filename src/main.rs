@@ -95,7 +95,7 @@ fn main() {
         ..Default::default()
     };
 
-    if let Err(e) = eframe::run_native(
+    if let Err(_) = eframe::run_native(
         "Lightshot Clone",
         options,
         Box::new(move |cc| {
@@ -120,7 +120,5 @@ fn main() {
                 hotkey_rx,
             ))
         }),
-    ) {
-        eprintln!("Fatal Error: {e}");
-    }
+    ) {}
 }

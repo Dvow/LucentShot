@@ -293,14 +293,10 @@ impl OverlayApp {
                     }
                 }
                 PendingAction::Google => {
-                    if let Err(e) = crate::actions::google_search(&cropped) {
-                        eprintln!("Google search failed: {e}");
-                    }
+                    let _ = crate::actions::google_search(&cropped);
                 }
                 PendingAction::Print { printer, copies, landscape, grayscale, paper } => {
-                    if let Err(e) = crate::actions::print_image_to(&cropped, &printer, copies, landscape, grayscale, &paper) {
-                        eprintln!("Print failed: {e}");
-                    }
+                    let _ = crate::actions::print_image_to(&cropped, &printer, copies, landscape, grayscale, &paper);
                 }
             }
         });

@@ -49,9 +49,7 @@ pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
         .save_file()
     {
         let path = if path.extension().is_some() { path } else { path.with_extension(ext) };
-        if let Err(e) = save_image_with_config(img, &path, config.format, config.jpeg_quality) {
-            eprintln!("Failed to save image: {e}");
-        }
+        let _ = save_image_with_config(img, &path, config.format, config.jpeg_quality);
         return Ok(true);
     }
     Ok(false)
@@ -68,8 +66,8 @@ pub fn open_url(url: &str) -> Result<()> {
     webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {e}"))
 }
 
-static REQWEST_CLIENT: once_cell::sync::Lazy<reqwest::blocking::Client> =
-    once_cell::sync::Lazy::new(|| {
+static REQWEST_CLIENT: std::sync::LazyLock<reqwest::blocking::Client> =
+    std::sync::LazyLock::new(|| {
         reqwest::blocking::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .build()
@@ -99,10 +97,7 @@ fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
 }
 
 pub fn google_search(img: &DynamicImage) -> Result<()> {
-    println!("Uploading for Google Search...");
     let direct_url = upload_to_anonymous_host(img)?;
-    println!("Image hosted at: {direct_url}");
-
     let search_url = format!("https://lens.google.com/uploadbyurl?url={direct_url}");
     open_url(&search_url)?;
     Ok(())
@@ -217,8 +212,8 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
 
 static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
 
-static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
-    once_cell::sync::Lazy::new(|| {
+static TESSDATA_DIR: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| {
         let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
         std::fs::create_dir_all(&tess_dir).expect("Failed to create tessdata dir");
         std::fs::write(tess_dir.join("eng.traineddata"), ENG_TRAINEDDATA)
@@ -229,8 +224,8 @@ static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
 use tesseract_static::tesseract_plumbing::TessBaseApi;
 use std::ffi::CString;
 
-static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
-    once_cell::sync::Lazy::new(|| {
+static TESS_ENGINE: std::sync::LazyLock<std::sync::Mutex<TessBaseApi>> =
+    std::sync::LazyLock::new(|| {
         let mut api = TessBaseApi::create();
         let datapath = CString::new(TESSDATA_DIR.to_string_lossy().as_bytes()).unwrap();
         let lang = CString::new("eng").unwrap();
@@ -245,7 +240,7 @@ static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
 
 pub fn warm_ocr_engine() {
     std::thread::spawn(|| {
-        once_cell::sync::Lazy::force(&TESS_ENGINE);
+        std::sync::LazyLock::force(&TESS_ENGINE);
     });
 }
 
@@ -297,8 +292,8 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
     out
 }
 
-static TTS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<Option<tts::Tts>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
+static TTS_ENGINE: std::sync::LazyLock<std::sync::Mutex<Option<tts::Tts>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
 
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     let text = image_to_text(img)?;
@@ -357,10 +352,7 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
 pub fn get_tts_voices() -> Vec<String> {
     let guard = match TTS_ENGINE.lock() {
         Ok(g) => g,
-        Err(e) => {
-            eprintln!("TTS engine lock poisoned: {e}");
-            return Vec::new();
-        }
+        Err(_) => return Vec::new(),
     };
     let Some(ref tts) = *guard else {
         return Vec::new();
@@ -375,11 +367,7 @@ fn normalize_tts_text(text: &str) -> String {
 }
 
 pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
-    println!("Uploading image...");
     let img_url = upload_to_anonymous_host(img)?;
-    println!("Image host link: {img_url}");
-
-    println!("Registering with Lightshot API...");
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "save",
@@ -414,10 +402,7 @@ pub fn get_printers() -> Vec<String> {
                 names
             }
         }
-        Err(e) => {
-            eprintln!("Failed to list printers: {e}");
-            vec!["Microsoft Print to PDF".to_string()]
-        }
+        Err(_) => vec!["Microsoft Print to PDF".to_string()]
     }
 }
 
@@ -443,8 +428,7 @@ pub fn print_image_to(
 
     {
         use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
-        use winprint::ticket::{Copies, PrintCapabilities, PrintTicketBuilder};
-        use winprint::ticket::{FeatureOptionPack, FeatureOptionPackWithPredefined};
+        use winprint::ticket::{Copies, FeatureOptionPack, FeatureOptionPackWithPredefined, PrintCapabilities, PrintTicketBuilder};
         use winprint::ticket::{PredefinedPageOrientation, PredefinedPageOutputColor};
 
         let devices = PrinterDevice::all().map_err(|e| anyhow!("List printers: {e:?}"))?;
@@ -468,9 +452,7 @@ pub fn print_image_to(
         if let Some(opt) = winprint::ticket::PageOrientation::list(&capabilities)
             .find(|o| o.as_predefined_name() == Some(orient))
         {
-            if let Err(e) = builder.merge(opt) {
-                eprintln!("Page orientation merge failed: {e}");
-            }
+            let _ = builder.merge(opt);
         }
 
         let color = if grayscale {
@@ -481,9 +463,7 @@ pub fn print_image_to(
         if let Some(opt) = winprint::ticket::PageOutputColor::list(&capabilities)
             .find(|o| o.as_predefined_name() == Some(color))
         {
-            if let Err(e) = builder.merge(opt) {
-                eprintln!("Page output color merge failed: {e}");
-            }
+            let _ = builder.merge(opt);
         }
 
         if let Some(predef) = paper_size_to_predefined(paper_size) {
@@ -491,9 +471,7 @@ pub fn print_image_to(
                 .page_media_sizes()
                 .find(|m| m.as_predefined_name() == Some(predef))
             {
-                if let Err(e) = builder.merge(media) {
-                    eprintln!("Page media merge failed: {e}");
-                }
+                let _ = builder.merge(media);
             }
         }
 

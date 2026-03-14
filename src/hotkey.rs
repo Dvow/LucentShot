@@ -257,9 +257,7 @@ fn register_hotkey(id: u32, binding: HotkeyBinding) {
     let Some(vk) = binding.key else { return };
     let modifiers = egui_modifiers_to_win(binding.modifiers);
     unsafe {
-        if RegisterHotKey(None, id as i32, modifiers, vk).is_err() {
-            eprintln!("Failed to register hotkey {id}");
-        }
+        let _ = RegisterHotKey(None, id as i32, modifiers, vk);
     }
 }
 
