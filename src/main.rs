@@ -92,12 +92,14 @@ fn main() {
     };
 
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
+    // Disable transparency on Linux when GPU lacks support (e.g. VMware)
+    let transparent = cfg!(not(target_os = "linux"));
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
         .with_visible(true)
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
-        .with_transparent(true);
+        .with_transparent(transparent);
     if let Some(ref icon) = icon_data {
         viewport = viewport.with_icon(Arc::new(icon.clone()));
     }
