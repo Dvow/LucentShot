@@ -38,11 +38,7 @@ fn load_tray_icon() -> Icon {
     Icon::from_rgba(data, w, h).expect("Failed to create tray icon")
 }
 
-fn main() {
-    config::init();
-    actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
-    let tray_icon = load_tray_icon();
-
+fn build_tray_menu() -> Menu {
     let tray_menu = Menu::new();
     let settings_item = MenuItem::with_id(
         MenuId::new(overlay::MENU_ID_SETTINGS),
@@ -58,12 +54,20 @@ fn main() {
     );
     let _ = tray_menu.append(&settings_item);
     let _ = tray_menu.append(&quit_item);
+    tray_menu
+}
+
+fn main() {
+    config::init();
+    actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
+    let tray_icon = load_tray_icon();
 
     #[cfg(target_os = "linux")]
     {
         // tray-icon on Linux needs GTK; eframe doesn't use it, so run tray in its own thread
         std::thread::spawn(move || {
             gtk::init().expect("GTK init failed");
+            let tray_menu = build_tray_menu();
             let _tray = TrayIconBuilder::new()
                 .with_menu(Box::new(tray_menu))
                 .with_menu_on_left_click(false)
@@ -77,6 +81,7 @@ fn main() {
 
     #[cfg(not(target_os = "linux"))]
     let _tray = {
+        let tray_menu = build_tray_menu();
         TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
             .with_menu_on_left_click(false)
