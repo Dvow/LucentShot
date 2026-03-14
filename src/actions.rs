@@ -11,11 +11,7 @@ pub enum CopyResult {
     Image,
 }
 
-pub fn copy_to_clipboard(
-    img: &DynamicImage,
-    _format: crate::config::ImageFormat,
-    _jpeg_quality: u8,
-) -> Result<CopyResult> {
+pub fn copy_to_clipboard(img: &DynamicImage) -> Result<CopyResult> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Clipboard: {e}"))?;
@@ -236,7 +232,7 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
 }
 
 /// Tessdata embedded at compile time — zero disk reads for the model file at build.
-static ENG_TRAINEDDATA: &[u8] = include_bytes!("../tessdata/eng.traineddata");
+static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
 
 /// Tessdata path — extracted once to temp at first use.
 static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
@@ -385,7 +381,10 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
 pub fn get_tts_voices() -> Vec<String> {
     let guard = match TTS_ENGINE.lock() {
         Ok(g) => g,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            eprintln!("TTS engine lock poisoned: {e}");
+            return Vec::new();
+        }
     };
     let Some(ref tts) = *guard else {
         return Vec::new();
@@ -439,7 +438,10 @@ pub fn get_printers() -> Vec<String> {
                 names
             }
         }
-        Err(_) => vec!["Microsoft Print to PDF".to_string()],
+        Err(e) => {
+            eprintln!("Failed to list printers: {e}");
+            vec!["Microsoft Print to PDF".to_string()]
+        }
     }
 }
 
@@ -458,7 +460,6 @@ pub fn print_image_to(
     copies: i32,
     landscape: bool,
     grayscale: bool,
-    _fit_to_page: bool,
     paper_size: &str,
 ) -> Result<()> {
     let temp_path = std::env::temp_dir().join("lightshot_print.png");
@@ -491,7 +492,9 @@ pub fn print_image_to(
         if let Some(opt) = winprint::ticket::PageOrientation::list(&capabilities)
             .find(|o| o.as_predefined_name() == Some(orient))
         {
-            let _ = builder.merge(opt);
+            if let Err(e) = builder.merge(opt) {
+                eprintln!("Page orientation merge failed: {e}");
+            }
         }
 
         let color = if grayscale {
@@ -502,7 +505,9 @@ pub fn print_image_to(
         if let Some(opt) = winprint::ticket::PageOutputColor::list(&capabilities)
             .find(|o| o.as_predefined_name() == Some(color))
         {
-            let _ = builder.merge(opt);
+            if let Err(e) = builder.merge(opt) {
+                eprintln!("Page output color merge failed: {e}");
+            }
         }
 
         if let Some(predef) = paper_size_to_predefined(paper_size) {
@@ -510,7 +515,9 @@ pub fn print_image_to(
                 .page_media_sizes()
                 .find(|m| m.as_predefined_name() == Some(predef))
             {
-                let _ = builder.merge(media);
+                if let Err(e) = builder.merge(media) {
+                    eprintln!("Page media merge failed: {e}");
+                }
             }
         }
 

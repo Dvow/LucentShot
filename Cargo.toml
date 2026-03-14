@@ -41,7 +41,10 @@ windows = { version = "0.56", features = ["Win32_UI_Shell", "Win32_UI_Shell_Comm
 tauri-winrt-notification = "0.7"
 winprint = { version = "0.2", default-features = false }
 
+[patch.crates-io]
+# Use local DLLs from dlls/ instead of downloading at build time
+tesseract-static = { path = "vendor/tesseract-static" }
+
 [build-dependencies]
 winres = "0.1"
-reqwest = { version = "0.12", features = ["blocking"] }
 image = "0.24"

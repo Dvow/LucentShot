@@ -58,12 +58,17 @@ fn build_tray_menu() -> Menu {
     tray_menu
 }
 
+/// Keeps a value alive for its `Drop` side effects; call to satisfy unused-variable checks.
+fn keep_alive<T>(value: &T) {
+    std::hint::black_box(value);
+}
+
 fn main() {
     config::init();
     actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
     let tray_icon = load_tray_icon();
 
-    let _tray = {
+    let tray = {
         let tray_menu = build_tray_menu();
         TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
@@ -73,6 +78,7 @@ fn main() {
             .build()
             .expect("Tray icon build failed")
     };
+    keep_alive(&tray);
 
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
     let mut viewport = egui::ViewportBuilder::default()

@@ -87,8 +87,6 @@ impl OverlayApp {
     }
 
     fn handle_copy_focused_window(&self) {
-        let copy_format = self.config.format;
-        let copy_quality = self.config.jpeg_quality;
         let show_notifications = self.config.general_show_notifications;
         thread::spawn(move || {
             let Ok(raw) = crate::capture::capture_focused_window_raw() else { return };
@@ -100,7 +98,7 @@ impl OverlayApp {
             )
             .unwrap();
             let img = image::DynamicImage::ImageRgba8(img_buffer);
-            if crate::actions::copy_to_clipboard(&img, copy_format, copy_quality).is_ok() && show_notifications {
+            if crate::actions::copy_to_clipboard(&img).is_ok() && show_notifications {
                 crate::notification::show("Copy", "Copied to clipboard");
             }
         });
@@ -260,13 +258,11 @@ impl OverlayApp {
         let auto_copy_link = self.config.general_auto_copy_link;
         let auto_close_upload = self.config.general_auto_close_upload;
         let show_notifications = self.config.general_show_notifications;
-        let copy_format = self.config.format;
-        let copy_quality = self.config.jpeg_quality;
         let ocr_tx = self.ocr_clipboard_tx.clone();
         thread::spawn(move || {
             match action {
                 PendingAction::Copy => {
-                    if crate::actions::copy_to_clipboard(&cropped, copy_format, copy_quality).is_ok() && show_notifications {
+                    if crate::actions::copy_to_clipboard(&cropped).is_ok() && show_notifications {
                         crate::notification::show("Copy", "Copied to clipboard");
                     }
                 }
@@ -285,7 +281,7 @@ impl OverlayApp {
                         }
                     }
                 }
-                PendingAction::OCR => {
+                PendingAction::Ocr => {
                     match crate::actions::image_to_text(&cropped) {
                         Ok(text) => { let _ = ocr_tx.send(text); }
                         Err(e) => crate::actions::show_ocr_error(&e.to_string()),
@@ -297,10 +293,14 @@ impl OverlayApp {
                     }
                 }
                 PendingAction::Google => {
-                    let _ = crate::actions::google_search(&cropped);
+                    if let Err(e) = crate::actions::google_search(&cropped) {
+                        eprintln!("Google search failed: {e}");
+                    }
                 }
-                PendingAction::Print { printer, copies, landscape, grayscale, fit, paper } => {
-                    let _ = crate::actions::print_image_to(&cropped, &printer, copies, landscape, grayscale, fit, &paper);
+                PendingAction::Print { printer, copies, landscape, grayscale, paper } => {
+                    if let Err(e) = crate::actions::print_image_to(&cropped, &printer, copies, landscape, grayscale, &paper) {
+                        eprintln!("Print failed: {e}");
+                    }
                 }
             }
         });
@@ -670,7 +670,6 @@ impl OverlayApp {
                             copies: self.print_copies,
                             landscape: self.print_landscape,
                             grayscale: self.print_grayscale,
-                            fit: self.print_fit_to_page,
                             paper: self.print_paper_size.clone(),
                         });
                     }
@@ -857,7 +856,7 @@ impl OverlayApp {
                 ui.horizontal(|ui| {
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(CLOUD).color(icon_color))).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.execute_action_immediate(ctx, PendingAction::Upload); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(GOOGLE).color(icon_color))).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.execute_action_immediate(ctx, PendingAction::Google); }
-                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ALIGN_LEFT).color(icon_color))).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::OCR); }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ALIGN_LEFT).color(icon_color))).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::Ocr); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ACCOUNT_VOICE).color(icon_color))).on_hover_text("Image to Speech").clicked() { self.execute_action_immediate(ctx, PendingAction::Speak); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(PRINT).color(icon_color))).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(SAVE).color(icon_color))).on_hover_text("Save (Ctrl+S)").clicked() { self.execute_action_immediate(ctx, PendingAction::Save); }
@@ -870,7 +869,7 @@ impl OverlayApp {
             let marker_bar_pos = egui::pos2(selection.max.x + spacing + 31.0, selection.max.y - 148.0 + 50.0);
             egui::Window::new("marker_settings").fixed_pos(marker_bar_pos).title_bar(false).resizable(false).collapsible(false).frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0)).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let (rect, _) = ui.allocate_at_least(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    let rect = ui.allocate_at_least(egui::vec2(14.0, 14.0), egui::Sense::hover()).0;
                     ui.painter().circle_filled(rect.center(), 7.0, self.current_color.gamma_multiply(self.marker_opacity));
                     ui.painter().circle_stroke(rect.center(), 7.0, Stroke::new(1.0, Color32::GRAY));
                     let response = ui.add(

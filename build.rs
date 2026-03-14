@@ -1,24 +1,5 @@
 fn main() {
-    // Font is provided by the dejavu crate (embedded in binary — no downloads or user installs)
-
-    // Ensure tessdata/eng.traineddata exists (required for OCR)
-    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let tessdata_dir = manifest_dir.join("tessdata");
-    let eng_path = tessdata_dir.join("eng.traineddata");
-    if !eng_path.exists() {
-        std::fs::create_dir_all(&tessdata_dir).ok();
-        println!("cargo:warning=Downloading eng.traineddata for Tesseract OCR...");
-        let url = "https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata";
-        match reqwest::blocking::get(url) {
-            Ok(resp) if resp.status().is_success() => {
-                if let Err(e) = std::fs::write(&eng_path, resp.bytes().unwrap_or_default()) {
-                    eprintln!("cargo:warning=Failed to write tessdata/eng.traineddata: {e}");
-                }
-            }
-            Ok(resp) => eprintln!("cargo:warning=Download failed (status {}): {}", resp.status(), url),
-            Err(e) => eprintln!("cargo:warning=Download failed: {e}. Run: Invoke-WebRequest -Uri \"{url}\" -OutFile tessdata/eng.traineddata"),
-        }
-    }
+    // eng.traineddata is embedded via include_bytes! in actions.rs — no build-time check needed
 
     // Convert icon.png to .ico for Windows exe
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

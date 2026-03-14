@@ -127,15 +127,13 @@ pub enum PendingAction {
     Copy,
     Save,
     Upload,
-    #[allow(clippy::upper_case_acronyms)]
-    OCR,
+    Ocr,
     Speak,
     Print {
         printer: String,
         copies: i32,
         landscape: bool,
         grayscale: bool,
-        fit: bool,
         paper: String,
     },
     Google,
