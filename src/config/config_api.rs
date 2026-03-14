@@ -91,22 +91,14 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
     }
 }
 
-/// Default: config in the same folder as the exe. Fallback: temp.
+/// Default: config in temp dir so app leaves no files in exe folder.
 fn default_config_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .map(|dir| dir.join("config.json"))
-        .unwrap_or_else(|| std::env::temp_dir().join("lightshotv2_config.json"))
+    std::env::temp_dir().join("lightshotv2_config.json")
 }
 
-/// Bootstrap file (stores user-chosen custom path) — same dir as exe, or temp.
+/// Bootstrap file (stores user-chosen custom path) — in temp when using default path.
 fn bootstrap_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .map(|dir| dir.join("config_path.txt"))
-        .unwrap_or_else(|| std::env::temp_dir().join("lightshotv2_config_path.txt"))
+    std::env::temp_dir().join("lightshotv2_config_path.txt")
 }
 
 fn config_path_from_bootstrap() -> PathBuf {
