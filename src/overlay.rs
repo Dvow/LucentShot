@@ -504,8 +504,16 @@ impl eframe::App for OverlayApp {
                     ui.painter().rect_stroke(sel, 0.0, Stroke::new(1.0, Color32::WHITE));
                     let size_text = format!("{} x {}", sel.width().round(), sel.height().round());
                     ui.painter().text(sel.left_top() - egui::vec2(0.0, 20.0), egui::Align2::LEFT_TOP, size_text, egui::FontId::proportional(14.0), Color32::WHITE);
-                    for (i, node) in self.get_nodes(sel).iter().enumerate() {
-                        let node_color = if self.resizing_node == Some(i) { Color32::LIGHT_BLUE } else { Color32::WHITE };
+                    let nodes = self.get_nodes(sel);
+                    let hovered_node = nodes.iter().position(|n| n.contains(pointer_pos));
+                    for (i, node) in nodes.iter().enumerate() {
+                        let node_color = if self.resizing_node == Some(i) {
+                            Color32::LIGHT_BLUE
+                        } else if hovered_node == Some(i) {
+                            Color32::from_rgb(180, 220, 255)
+                        } else {
+                            Color32::WHITE
+                        };
                         ui.painter().rect_filled(*node, 0.0, node_color);
                     }
                 } else {
