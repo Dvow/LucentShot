@@ -57,7 +57,6 @@ pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
     Ok(false)
 }
 
-/// Pick a path to save a file (for config, etc). Returns None if user cancels.
 pub fn pick_save_path(default_name: &str, filter_label: &str, ext: &str) -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .add_filter(filter_label, &[ext])
@@ -109,7 +108,6 @@ pub fn google_search(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
-/// Show error to user via native message dialog.
 pub fn show_ocr_error(msg: &str) {
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
@@ -125,12 +123,8 @@ pub fn image_to_text(img: &DynamicImage) -> Result<String> {
 
 const OCR_SCALE: u32 = 3;
 
-/// Minimum skew angle (degrees) to trigger deskew — avoids rotating for nearly-straight text.
 const DESKEW_THRESHOLD_DEG: f32 = 0.8;
 
-/// Detect skew angle using horizontal projection variance — when text lines are horizontal,
-/// row sums have high variance; when skewed, variance drops. Returns angle in degrees
-/// (positive = clockwise correction needed).
 fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 
@@ -139,7 +133,6 @@ fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
         return 0.0;
     }
 
-    // Sample angles from -45° to +45° in 3° steps (handles significantly tilted text)
     let mut best_angle = 0.0f32;
     let mut best_variance = 0.0f64;
 
@@ -149,10 +142,9 @@ fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
             binary,
             theta,
             Interpolation::Bilinear,
-            image::Luma([255u8]), // white fill for background
+            image::Luma([255u8]),
         );
 
-        // Horizontal projection: sum of pixels per row (0 = black, 255 = white; we want low where text)
         let mut row_sums: Vec<u64> = vec![0; rotated.height() as usize];
         for y in 0..rotated.height() {
             for x in 0..rotated.width() {
@@ -161,7 +153,6 @@ fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
             }
         }
 
-        // Variance of row sums — maximized when text lines are horizontal
         let mean = row_sums.iter().sum::<u64>() as f64 / row_sums.len() as f64;
         let variance = row_sums
             .iter()
@@ -181,7 +172,6 @@ fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
     best_angle
 }
 
-/// Deskew image by rotating to correct for detected skew.
 fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 
@@ -200,18 +190,15 @@ fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
     DynamicImage::ImageLuma8(rotated)
 }
 
-/// Preprocess image for OCR: deskew, 3x upscale, grayscale, binarize (Otsu).
 fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     use imageproc::contrast;
 
-    // 0. Deskew: detect and correct rotation so Tesseract sees horizontal text
     let gray0 = img.to_luma8();
     let level0 = contrast::otsu_level(&gray0);
     let binary0 = contrast::threshold(&gray0, level0);
     let skew_angle = detect_skew_angle(&binary0);
     let img = deskew_image(img, skew_angle);
 
-    // 1. Always 3x upscale
     let w = img.width();
     let h = img.height();
     let new_w = w * OCR_SCALE;
@@ -223,18 +210,13 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
         FilterType::Lanczos3,
     ));
 
-    // 2. Convert to grayscale
     let gray = img.to_luma8();
-
-    // 3. Binarize with Otsu threshold (black text on white background)
     let level = contrast::otsu_level(&gray);
     contrast::threshold(&gray, level)
 }
 
-/// Tessdata embedded at compile time — zero disk reads for the model file at build.
 static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
 
-/// Tessdata path — extracted once to temp at first use.
 static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
     once_cell::sync::Lazy::new(|| {
         let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
@@ -244,7 +226,6 @@ static TESSDATA_DIR: once_cell::sync::Lazy<std::path::PathBuf> =
         tess_dir
     });
 
-/// Reusable Tesseract instance — initialized once, reused for all OCR calls (30–80ms per image).
 use tesseract_static::tesseract_plumbing::TessBaseApi;
 use std::ffi::CString;
 
@@ -256,20 +237,18 @@ static TESS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<TessBaseApi>> =
         api.init_2(Some(datapath.as_c_str()), Some(lang.as_c_str()))
             .expect("Tesseract init failed");
         let ps_mode = CString::new("tessedit_pageseg_mode").unwrap();
-        let ps_val = CString::new("6").unwrap(); // single uniform block
+        let ps_val = CString::new("6").unwrap();
         api.set_variable(ps_mode.as_c_str(), ps_val.as_c_str())
             .expect("Tesseract set_variable failed");
         std::sync::Mutex::new(api)
     });
 
-/// Pre-warms the engine at startup — forces TESS_ENGINE init in background.
 pub fn warm_ocr_engine() {
     std::thread::spawn(|| {
         once_cell::sync::Lazy::force(&TESS_ENGINE);
     });
 }
 
-/// OCR using the shared TessBaseApi — ~30–80ms per image (model stays in memory).
 fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     let gray = preprocess_for_ocr(img);
     let (width, height) = gray.dimensions();
@@ -283,11 +262,11 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
         frame_data,
         width as i32,
         height as i32,
-        1,            // bytes_per_pixel (grayscale)
-        width as i32, // bytes_per_line
+        1,
+        width as i32,
     )
     .map_err(|e| anyhow!("Tesseract set_image failed: {e:?}"))?;
-    api.set_source_resolution(300); // 300 DPI for printed text
+    api.set_source_resolution(300);
     api.recognize().map_err(|e| anyhow!("Tesseract recognize failed: {e:?}"))?;
     let raw = api
         .get_utf8_text()
@@ -302,7 +281,6 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     }
 }
 
-/// Fix slashed zero misreads: replace € or @ with 0 when they appear in a numeric context.
 fn fix_ocr_slashed_zero(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -319,7 +297,6 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
     out
 }
 
-/// Shared TTS engine — reused for all speak calls. New speak(interrupt: true) cancels previous.
 static TTS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<Option<tts::Tts>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
 
@@ -377,7 +354,6 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
-/// Returns installed TTS voice names for the settings dropdown.
 pub fn get_tts_voices() -> Vec<String> {
     let guard = match TTS_ENGINE.lock() {
         Ok(g) => g,

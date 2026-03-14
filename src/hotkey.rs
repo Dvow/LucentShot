@@ -1,4 +1,3 @@
-// Platform-agnostic virtual key codes (match Windows VK for config compatibility)
 mod vk {
     pub const VK_SNAPSHOT: u32 = 0x2C;
     pub const VK_A: u32 = 0x41;

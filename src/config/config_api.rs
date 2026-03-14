@@ -92,12 +92,10 @@ pub fn hotkey_config(config: &ConfigImpl) -> HotkeyConfig {
     }
 }
 
-/// Default: config in temp dir so app leaves no files in exe folder.
 fn default_config_path() -> PathBuf {
     std::env::temp_dir().join("lightshotv2_config.json")
 }
 
-/// Bootstrap file (stores user-chosen custom path) — in temp when using default path.
 fn bootstrap_path() -> PathBuf {
     std::env::temp_dir().join("lightshotv2_config_path.txt")
 }

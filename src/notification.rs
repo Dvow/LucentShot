@@ -1,6 +1,3 @@
-//! Windows toast notifications via tauri-winrt-notification.
-//! Uses PowerShell AppUserModelID for unpackaged apps (toast header shows "PowerShell").
-
 pub fn show(title: &str, body: &str) {
     use std::path::Path;
     use std::sync::OnceLock;

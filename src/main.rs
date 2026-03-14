@@ -23,7 +23,6 @@ fn load_tray_icon() -> Icon {
     let img = image::load_from_memory(png_data).expect("Failed to load tray icon");
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
-    // Resize to 32x32 for tray if larger
     let (w, h, data) = if w > 32 || h > 32 {
         let scaled = image::imageops::resize(
             &rgba,
@@ -58,14 +57,13 @@ fn build_tray_menu() -> Menu {
     tray_menu
 }
 
-/// Keeps a value alive for its `Drop` side effects; call to satisfy unused-variable checks.
 fn keep_alive<T>(value: &T) {
     std::hint::black_box(value);
 }
 
 fn main() {
     config::init();
-    actions::warm_ocr_engine(); // Background: extract tessdata, init Tesseract — first OCR will be faster
+    actions::warm_ocr_engine();
     let tray_icon = load_tray_icon();
 
     let tray = {

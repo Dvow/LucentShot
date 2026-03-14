@@ -39,8 +39,6 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: efr
         let mut paint = Paint::default();
         
         if shape.is_marker {
-            // Use standard alpha blending instead of Multiply to prevent darkening on dark backgrounds.
-            // This matches the UI preview's look perfectly.
             let skia_color = Color::from_rgba8(
                 shape.color.r(),
                 shape.color.g(),
@@ -168,8 +166,7 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: efr
 
     let final_rgba = pixmap.take();
     let mut final_full = DynamicImage::ImageRgba8(image::ImageBuffer::from_raw(phys_w, phys_h, final_rgba).unwrap());
-    
-    // Add text using imageproc
+
     for shape in shapes {
         if shape.tool == Tool::Text {
             if let Some(pos) = shape.points.first() {

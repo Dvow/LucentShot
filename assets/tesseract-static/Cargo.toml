@@ -22,12 +22,8 @@ version = "0.1.8"
 [dependencies.lazy_static]
 version = "1.5.0"
 
-[dependencies.libc]
-version = "0.2.169"
-
 [dependencies.thiserror]
 version = "2.0.11"
 
 [features]
 default = []
-disable_avx = []

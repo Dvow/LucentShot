@@ -42,7 +42,6 @@ tauri-winrt-notification = "0.7"
 winprint = { version = "0.2", default-features = false }
 
 [patch.crates-io]
-# Use local DLLs from dlls/ instead of downloading at build time
 tesseract-static = { path = "assets/tesseract-static" }
 
 [build-dependencies]

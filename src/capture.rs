@@ -7,7 +7,6 @@ pub struct RawCapture {
     pub pixels: Vec<u8>,
 }
 
-/// Virtual screen bounds: (x, y, width, height) covering all monitors.
 pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -43,7 +42,6 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
         let h_bitmap = CreateCompatibleBitmap(h_dc_screen, width, height);
         let h_old_obj = SelectObject(h_dc_mem, h_bitmap);
         
-        // Capture the full virtual screen (all monitors)
         BitBlt(h_dc_mem, 0, 0, width, height, h_dc_screen, vx, vy, SRCCOPY)?;
 
         if include_cursor {
@@ -72,14 +70,13 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
         let mut bmi = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,
-            biHeight: -height, // negative for top-down
+            biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB.0,
             ..Default::default()
         };
 
-        // Pre-allocate buffer to avoid reallocation during capture
         let mut buffer: Vec<u8> = vec![0; (width * height * 4) as usize];
         
         GetDIBits(
@@ -92,7 +89,6 @@ pub fn capture_primary_screen_raw(include_cursor: bool) -> Result<RawCapture> {
             DIB_RGB_COLORS,
         );
 
-        // CLEANUP
         let _ = SelectObject(h_dc_mem, h_old_obj);
         let _ = DeleteObject(h_bitmap);
         let _ = DeleteDC(h_dc_mem);
@@ -118,7 +114,6 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
             return Err(anyhow::anyhow!("No foreground window"));
         }
         let mut rect = RECT::default();
-        // Prefer DWM extended frame bounds (excludes shadow) for consistent edges
         let use_dwm = DwmGetWindowAttribute(
             hwnd,
             DWMWA_EXTENDED_FRAME_BOUNDS,
@@ -128,13 +123,11 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
         .is_ok();
         if !use_dwm {
             GetWindowRect(hwnd, &mut rect)?;
-            // Fallback: inset by 2 pixels to reduce shadow/background bleed
             rect.left += 2;
             rect.top += 2;
             rect.right = (rect.right - 2).max(rect.left);
             rect.bottom = (rect.bottom - 2).max(rect.top);
         }
-        // Trim 1 pixel on each side around the entire edge
         let left = rect.left + 1;
         let top = rect.top + 1;
         let right = (rect.right - 1).max(left);
@@ -191,14 +184,10 @@ pub fn capture_focused_window_raw() -> Result<RawCapture> {
 }
 
 pub fn raw_to_color_image(raw: RawCapture) -> ColorImage {
-    // Parallel optimized swap: BGRA to RGBA
     let mut pixels = raw.pixels;
-    
-    // Using simple loop but could be par_chunks if needed.
-    // For single screen, this is usually sub-millisecond.
+
     for chunk in pixels.chunks_exact_mut(4) {
         chunk.swap(0, 2);
-        // Ensure alpha is 255
         chunk[3] = 255;
     }
 

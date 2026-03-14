@@ -4892,7 +4892,6 @@ version = "0.2.1"
 dependencies = [
  "dlopen",
  "lazy_static",
- "libc",
  "thiserror 2.0.18",
 ]
 

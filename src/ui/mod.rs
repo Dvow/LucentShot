@@ -23,7 +23,6 @@ impl SettingsTab {
 pub struct SettingsWindowState {
     pub active_tab: SettingsTab,
     pub last_snapshot_down: bool,
-    /// Cached TTS voices; populated lazily when TTS tab is shown (get_tts_voices spawns PowerShell).
     pub tts_voices_cache: Option<Vec<String>>,
 }
 
