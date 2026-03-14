@@ -180,14 +180,24 @@ pub fn start_low_level_hotkey_loop(
 
     #[cfg(not(windows))]
     {
-        // Linux: no global hotkeys; spawn dummy thread that blocks (keeps rx alive)
-        let _config = config.clone();
-        let _listening = listening.clone();
+        // Linux: no global hotkeys. Keep event_tx alive so hotkey_rx stays open for overlay.
+        let config_thread = config.clone();
+        let listening_thread = listening.clone();
         std::thread::spawn(move || {
-            let _ = _config;
-            let _ = _listening;
+            let guard = (ctx, trigger_flag, event_tx, config_thread, listening_thread);
             std::thread::park();
+            drop(guard);
         });
+        // Ensure all variants exist for overlay's exhaustive match on hotkey_rx
+        debug_assert_eq!(
+            [
+                HotkeyEvent::InstantSave,
+                HotkeyEvent::InstantUpload,
+                HotkeyEvent::CopyFocusedWindow,
+            ]
+            .len(),
+            3
+        );
         HotkeyHandle { config, listening }
     }
 }
@@ -459,6 +469,7 @@ pub fn vk_label(vk_code: u32) -> Option<&'static str> {
         _ => return None,
     })
 }
+
 
 pub fn parse_hotkey_combo(combo: &str) -> Option<HotkeyBinding> {
     let mut mods = egui::Modifiers::NONE;

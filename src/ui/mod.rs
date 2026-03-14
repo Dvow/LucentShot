@@ -209,6 +209,11 @@ fn capture_hotkey_input(
         return;
     }
 
+    #[cfg(not(windows))]
+    {
+        *last_snapshot_down = false;
+    }
+
     let mut next_key: Option<u32> = None;
     let mut next_ctrl = None;
     let mut next_shift = None;
