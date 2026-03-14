@@ -21,8 +21,8 @@ debug = false
 
 [dependencies]
 arboard = "3.4"
-eframe = "0.27"
-image = "0.24"
+eframe = { version = "0.27", default-features = false, features = ["glow", "default_fonts"] }
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "bmp", "gif", "ico"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "blocking", "native-tls"] }
 rfd = "0.15"
 webbrowser = "1.0"
@@ -47,4 +47,4 @@ tesseract-static = { path = "assets/tesseract-static" }
 
 [build-dependencies]
 winres = "0.1"
-image = "0.24"
+image = { version = "0.24", default-features = false, features = ["png", "ico"] }
