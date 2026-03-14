@@ -59,14 +59,32 @@ fn main() {
     let _ = tray_menu.append(&settings_item);
     let _ = tray_menu.append(&quit_item);
 
-    let tray = TrayIconBuilder::new()
-        .with_menu(Box::new(tray_menu))
-        .with_menu_on_left_click(false)
-        .with_tooltip("Lightshot Clone - Left-click to screenshot")
-        .with_icon(tray_icon)
-        .build()
-        .unwrap();
-    println!("DEBUG: Tray initialized: {:?}", tray.id());
+    #[cfg(target_os = "linux")]
+    {
+        // tray-icon on Linux needs GTK; eframe doesn't use it, so run tray in its own thread
+        std::thread::spawn(move || {
+            gtk::init().expect("GTK init failed");
+            let _tray = TrayIconBuilder::new()
+                .with_menu(Box::new(tray_menu))
+                .with_menu_on_left_click(false)
+                .with_tooltip("Lightshot Clone - Left-click to screenshot")
+                .with_icon(tray_icon)
+                .build()
+                .expect("Tray icon build failed");
+            gtk::main();
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    let _tray = {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(tray_menu))
+            .with_menu_on_left_click(false)
+            .with_tooltip("Lightshot Clone - Left-click to screenshot")
+            .with_icon(tray_icon)
+            .build()
+            .expect("Tray icon build failed")
+    };
 
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
     let mut viewport = egui::ViewportBuilder::default()

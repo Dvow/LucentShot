@@ -3387,6 +3387,7 @@ dependencies = [
  "dirs",
  "eframe",
  "egui_nerdfonts",
+ "gtk",
  "image 0.24.9",
  "imageproc",
  "once_cell",
