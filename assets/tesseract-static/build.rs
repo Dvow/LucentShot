@@ -10,9 +10,9 @@ fn main() {
     // Prefer local DLLs from project dlls/ directory (no download at build time)
     let manifest_dir_s = env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_dir = Path::new(&manifest_dir_s);
-    let project_root = manifest_dir.parent().and_then(|p| p.parent());
+    let project_root = manifest_dir.parent();
     if let Some(root) = project_root {
-        let dlls_dir = root.join("dlls");
+        let dlls_dir = root;
         #[cfg(target_os = "windows")]
         {
             let lept_local = dlls_dir.join("leptonica-1.85.0.dll");
@@ -45,8 +45,8 @@ fn main() {
         }
     }
 
-    eprintln!("Error: Tesseract/Leptonica DLLs not found in dlls/ folder.");
-    eprintln!("Required: dlls/leptonica-1.85.0.dll and dlls/tesseract.dll");
-    eprintln!("No download — place the DLLs in dlls/ before building.");
+    eprintln!("Error: Tesseract/Leptonica DLLs not found in assets/ folder.");
+    eprintln!("Required: assets/leptonica-1.85.0.dll and assets/tesseract.dll");
+    eprintln!("No download — place the DLLs in assets/ before building.");
     std::process::exit(1);
 }

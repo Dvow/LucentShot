@@ -43,7 +43,7 @@ winprint = { version = "0.2", default-features = false }
 
 [patch.crates-io]
 # Use local DLLs from dlls/ instead of downloading at build time
-tesseract-static = { path = "vendor/tesseract-static" }
+tesseract-static = { path = "assets/tesseract-static" }
 
 [build-dependencies]
 winres = "0.1"
