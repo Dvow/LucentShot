@@ -5,8 +5,6 @@ use anyhow::{Result, anyhow};
 use std::borrow::Cow;
 use std::io::Cursor;
 use std::fs;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use serde_json::json;
 
 pub enum CopyResult {
@@ -330,154 +328,79 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
     out
 }
 
+/// Shared TTS engine — reused for all speak calls. New speak(interrupt: true) cancels previous.
+static TTS_ENGINE: once_cell::sync::Lazy<std::sync::Mutex<Option<tts::Tts>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
+
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     let text = match image_to_text(img) {
         Ok(text) => text,
-        Err(err) => {
-            let log_path = std::env::temp_dir().join("lightshotv2_tts_error.txt");
-            let _ = fs::write(&log_path, format!("{}", err));
-            return Err(err);
-        }
+        Err(err) => return Err(err),
     };
     let normalized = normalize_tts_text(&text);
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("No text detected"));
     }
-    let path = std::env::temp_dir().join("lightshotv2_tts.txt");
-    fs::write(&path, trimmed)?;
+
+    let mut guard = TTS_ENGINE.lock().map_err(|e| anyhow!("TTS lock poisoned: {}", e))?;
+    let Some(ref mut tts) = *guard else {
+        return Err(anyhow!("TTS not available on this system"));
+    };
+
     let settings = crate::config::cfg();
+    let feat = tts.supported_features();
 
-    #[cfg(target_os = "windows")]
-    {
-        let voice_part = if settings.tts_voice.trim().is_empty() {
-            String::new()
-        } else {
-            let escaped = settings.tts_voice.trim().replace("'", "''");
-            format!("$s.SelectVoice('{}'); ", escaped)
-        };
-        let script = format!(
-            "Add-Type -AssemblyName System.Speech; \
-             $t = Get-Content -Raw -Path '{}'; \
-             $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-             {}; \
-             $s.Rate = {}; \
-             $s.Volume = {}; \
-             $s.Speak($t);",
-            path.display().to_string().replace("'", "''")
-            ,voice_part
-            ,settings.tts_rate
-            ,settings.tts_volume
-        );
-        run_tts_powershell_silent(&script)?;
+    if feat.voice {
+        let voice_name = settings.tts_voice.trim();
+        if !voice_name.is_empty() {
+            if let Ok(voices) = tts.voices() {
+                if let Some(voice) = voices.into_iter().find(|v| v.name() == voice_name) {
+                    let _ = tts.set_voice(&voice);
+                }
+            }
+        }
+    }
+    if feat.rate {
+        let min_r = tts.min_rate();
+        let max_r = tts.max_rate();
+        let norm_r = tts.normal_rate();
+        let rate = norm_r + (settings.tts_rate as f32 / 10.0) * (max_r - min_r) * 0.2;
+        let rate = rate.clamp(min_r, max_r);
+        let _ = tts.set_rate(rate);
+    }
+    if feat.volume {
+        let min_v = tts.min_volume();
+        let max_v = tts.max_volume();
+        let vol = min_v + (settings.tts_volume as f32 / 100.0) * (max_v - min_v);
+        let vol = vol.clamp(min_v, max_v);
+        let _ = tts.set_volume(vol);
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        return Err(anyhow!("Image to speech is only supported on Windows"));
-    }
+    tts.speak(trimmed, true).map_err(|e| anyhow!("TTS speak: {:?}", e))?;
+    drop(guard);
 
+    while {
+        let g = TTS_ENGINE.lock().unwrap();
+        g.as_ref().and_then(|t| t.is_speaking().ok()).unwrap_or(false)
+    } {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     Ok(())
 }
 
-/// Returns installed Windows TTS voice names. Empty on non-Windows or if listing fails.
+/// Returns installed TTS voice names for the settings dropdown.
 pub fn get_tts_voices() -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        let script = "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | ForEach-Object { if ($_.Enabled) { $_.VoiceInfo.Name } }";
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-Command", script])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output();
-        match output {
-            Ok(out) if out.status.success() => {
-                let s = String::from_utf8_lossy(&out.stdout);
-                s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
-            }
-            _ => Vec::new(),
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    Vec::new()
-}
-
-#[cfg(target_os = "windows")]
-static TTS_PROCESS: std::sync::OnceLock<std::sync::RwLock<Option<windows::Win32::Foundation::HANDLE>>> = std::sync::OnceLock::new();
-
-#[cfg(target_os = "windows")]
-fn run_tts_powershell_silent(script: &str) -> Result<()> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
-        PROCESS_INFORMATION, STARTUPINFOW, INFINITE,
+    let guard = match TTS_ENGINE.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
     };
-    let tts_lock = TTS_PROCESS.get_or_init(|| std::sync::RwLock::new(None));
-
-    // Terminate any currently playing TTS before starting new one
-    {
-        let mut guard = tts_lock.write().unwrap();
-        if let Some(prev) = guard.take() {
-            unsafe {
-                let _ = TerminateProcess(prev, 1);
-                let _ = CloseHandle(prev);
-            }
-        }
-    }
-
-    let cmd = format!(
-        "powershell.exe -NoProfile -WindowStyle Hidden -Command \"{}\"",
-        script.replace('"', "\\\"")
-    );
-    let mut wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
-
-    let mut si = STARTUPINFOW::default();
-    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    si.dwFlags = windows::Win32::System::Threading::STARTF_USESHOWWINDOW;
-    si.wShowWindow = 0; // SW_HIDE
-
-    let mut pi = PROCESS_INFORMATION::default();
-
-    let ok = unsafe {
-        CreateProcessW(
-            None,
-            windows::core::PWSTR(wide.as_mut_ptr()),
-            None,
-            None,
-            false,
-            windows::Win32::System::Threading::PROCESS_CREATION_FLAGS::default(),
-            None,
-            None,
-            &si,
-            &mut pi,
-        )
+    let Some(ref tts) = *guard else {
+        return Vec::new();
     };
-
-    if ok.is_err() {
-        return Err(anyhow!("Failed to start TTS process"));
-    }
-
-    // Store our process handle so a future TTS can terminate us
-    {
-        let mut guard = tts_lock.write().unwrap();
-        *guard = Some(pi.hProcess);
-    }
-
-    unsafe {
-        let _ = WaitForSingleObject(pi.hProcess, INFINITE);
-        let mut code: u32 = 0;
-        let _ = GetExitCodeProcess(pi.hProcess, &mut code);
-        let mut guard = tts_lock.write().unwrap();
-        let was_replaced = guard.as_ref() != Some(&pi.hProcess);
-        if !was_replaced {
-            *guard = None;
-            let _ = CloseHandle(pi.hProcess);
-        }
-        let _ = CloseHandle(pi.hThread);
-        if !was_replaced && code != 0 {
-            return Err(anyhow!("Speech failed (exit code {})", code));
-        }
-    }
-    Ok(())
+    tts.voices()
+        .map(|v| v.into_iter().map(|voice| voice.name()).collect())
+        .unwrap_or_default()
 }
 
 fn normalize_tts_text(text: &str) -> String {
