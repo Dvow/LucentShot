@@ -345,9 +345,7 @@ fn handle_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool
         let _ = crate::actions::open_url(url);
     }
     if auto_copy_link {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(url);
-        }
+        let _ = crate::actions::set_clipboard_text(url);
     }
 }
 
@@ -355,9 +353,7 @@ impl eframe::App for OverlayApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         // Process OCR results on main thread (clipboard must be set from UI thread on Windows)
         while let Ok(text) = self.ocr_clipboard_rx.try_recv() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let _ = clipboard.set_text(text.clone());
-            }
+            let _ = crate::actions::set_clipboard_text(&text);
             if self.config.general_show_notifications {
                 crate::notification::show("OCR", "Text copied to clipboard");
             }

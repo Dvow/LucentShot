@@ -108,11 +108,7 @@ fn render_general(ui: &mut egui::Ui, config: &mut ConfigImpl) {
                         .hint_text("Default"),
                 );
                 if ui.button("Browse…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("config", &["json"])
-                        .set_file_name("config.json")
-                        .save_file()
-                    {
+                    if let Some(path) = crate::actions::pick_save_path("config.json", "JSON config", "json") {
                         config.general_config_path = path.to_string_lossy().to_string();
                     }
                 }
