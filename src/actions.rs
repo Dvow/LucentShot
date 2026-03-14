@@ -473,6 +473,12 @@ pub fn print_image_to(
     let temp_path = std::env::temp_dir().join("lightshot_print.png");
     img.save(&temp_path)?;
 
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (printer_name, copies, landscape, grayscale, paper_size);
+        return Err(anyhow!("Printing is only supported on Windows"));
+    }
+
     #[cfg(target_os = "windows")]
     {
         use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
@@ -529,15 +535,8 @@ pub fn print_image_to(
         printer
             .print(&temp_path, ticket)
             .map_err(|e| anyhow!("Print: {:?}", e))?;
+        Ok(())
     }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (printer_name, copies, landscape, grayscale, paper_size);
-        return Err(anyhow!("Printing is only supported on Windows"));
-    }
-
-    Ok(())
 }
 
 fn format_extension_and_label(format: crate::config::ImageFormat) -> (&'static str, &'static str) {

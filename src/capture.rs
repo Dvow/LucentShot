@@ -31,10 +31,10 @@ pub fn get_virtual_screen_bounds() -> (i32, i32, i32, i32) {
         let mut max_x = 0i32;
         let mut max_y = 0i32;
         for m in &monitors {
-            let x = m.x() as i32;
-            let y = m.y() as i32;
-            let w = m.width() as i32;
-            let h = m.height() as i32;
+            let x = m.x().unwrap_or(0);
+            let y = m.y().unwrap_or(0);
+            let w = m.width().unwrap_or(0) as i32;
+            let h = m.height().unwrap_or(0) as i32;
             if w > 0 && h > 0 {
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
@@ -226,7 +226,7 @@ pub fn capture_primary_screen_raw(_include_cursor: bool) -> Result<RawCapture> {
     let monitors = Monitor::all().map_err(|e| anyhow::anyhow!("Monitor::all: {:?}", e))?;
     let monitor = monitors
         .into_iter()
-        .find(|m| m.is_primary())
+        .find(|m| m.is_primary().unwrap_or(false))
         .or_else(|| {
             Monitor::all().ok().and_then(|m| m.into_iter().next())
         })
