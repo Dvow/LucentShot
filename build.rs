@@ -15,7 +15,7 @@ fn main() {
             };
             if let Ok(file) = std::fs::File::create(&icon_ico) {
                 let _ = image::codecs::ico::IcoEncoder::new(file)
-                    .write_image(resized.as_raw(), w, h, image::ColorType::Rgba8);
+                    .write_image(resized.as_raw(), w, h, image::ColorType::Rgba8.into());
             }
         }
     }

@@ -1,15 +1,15 @@
+use ab_glyph::FontRef;
+use ab_glyph::PxScale;
 use image::{DynamicImage, Rgba};
 use std::sync::OnceLock;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin, FillRule};
 use imageproc::drawing::draw_text_mut;
-use rusttype::{Font, Scale};
 use crate::config::{Shape, Tool};
 
-fn font() -> &'static Font<'static> {
-    static FONT: OnceLock<Font<'static>> = OnceLock::new();
+fn font() -> &'static FontRef<'static> {
+    static FONT: OnceLock<FontRef<'static>> = OnceLock::new();
     FONT.get_or_init(|| {
-        let data = dejavu::sans::regular();
-        Font::try_from_bytes(data).expect("Bundled DejaVu font invalid")
+        FontRef::try_from_slice(dejavu::sans::regular()).expect("Bundled DejaVu font invalid")
     })
 }
 
@@ -171,7 +171,7 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: efr
         if shape.tool == Tool::Text {
             if let Some(pos) = shape.points.first() {
                 let color = Rgba([shape.color.r(), shape.color.g(), shape.color.b(), shape.color.a()]);
-                let scale = Scale { x: 20.0 * ppp, y: 20.0 * ppp };
+                let scale = PxScale { x: 20.0 * ppp, y: 20.0 * ppp };
                 draw_text_mut(
                     &mut final_full,
                     color,
