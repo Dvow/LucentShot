@@ -176,7 +176,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools",
  "log",
  "prettyplease",
  "proc-macro2 1.0.106",
@@ -589,12 +589,6 @@ name = "custom_derive"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
-
-[[package]]
-name = "dejavu"
-version = "2.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "017b75b5fbc5806d490da36acc5c4d0e4ae1b69890d02f24c268da971813fbc1"
 
 [[package]]
 name = "dirs"
@@ -1814,7 +1808,7 @@ dependencies = [
  "conv",
  "getrandom 0.2.17",
  "image 0.25.10",
- "itertools 0.12.1",
+ "itertools",
  "nalgebra",
  "num",
  "rand",
@@ -1847,15 +1841,6 @@ checksum = "c91338f0783edbd6195decb37bae672fd3b165faffb89bf7b9e6942f8b1a731a"
 dependencies = [
  "memchr",
  "serde",
-]
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
 ]
 
 [[package]]
@@ -2068,7 +2053,6 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "arboard",
- "dejavu",
  "dirs",
  "eframe",
  "egui_nerdfonts",

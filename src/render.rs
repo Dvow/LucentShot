@@ -6,10 +6,12 @@ use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, LineCap, LineJoin, Fi
 use imageproc::drawing::draw_text_mut;
 use crate::config::{Shape, Tool};
 
+static MINIMAL_FONT: &[u8] = include_bytes!("../assets/fonts/Carlito-Regular.ttf");
+
 fn font() -> &'static FontRef<'static> {
     static FONT: OnceLock<FontRef<'static>> = OnceLock::new();
     FONT.get_or_init(|| {
-        FontRef::try_from_slice(dejavu::sans::regular()).expect("Bundled DejaVu font invalid")
+        FontRef::try_from_slice(MINIMAL_FONT).expect("Bundled font invalid")
     })
 }
 

@@ -25,7 +25,7 @@ debug = false
 
 [dependencies]
 arboard = "3.4"
-eframe = { version = "0.27", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.27", default-features = false, features = ["glow"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "ico"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "blocking", "native-tls"] }
 rfd = { version = "0.15", default-features = false }
@@ -33,7 +33,6 @@ webbrowser = "1.0"
 anyhow = "1.0"
 ab_glyph = "0.2"
 imageproc = { version = "0.24", default-features = false }
-dejavu = "2.37"
 egui_nerdfonts = "0.1"
 serde_json = "1.0"
 tiny-skia = "0.11"

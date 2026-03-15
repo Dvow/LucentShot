@@ -100,6 +100,16 @@ fn main() {
         options,
         Box::new(move |cc| {
             let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "minimal".to_owned(),
+                egui::FontData::from_static(include_bytes!("../assets/fonts/Carlito-Regular.ttf")),
+            );
+            fonts.families.get_mut(&egui::FontFamily::Proportional).map(|v| {
+                v.insert(0, "minimal".to_owned());
+            });
+            fonts.families.get_mut(&egui::FontFamily::Monospace).map(|v| {
+                v.insert(0, "minimal".to_owned());
+            });
             egui_nerdfonts::add_to_fonts(&mut fonts, egui_nerdfonts::Variant::Regular);
             cc.egui_ctx.set_fonts(fonts);
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
