@@ -27,6 +27,7 @@ pub struct OverlayApp {
     pub is_active: bool,
     pub trigger_flag: Arc<AtomicBool>,
     pub marker_opacity: f32,
+    pub rect_filled: bool,
     pub editing_text_index: Option<usize>,
     pub show_print_popup: bool,
     pub cropped_preview: Option<egui::TextureHandle>,
@@ -133,6 +134,7 @@ impl OverlayApp {
             is_active: false,
             trigger_flag,
             marker_opacity: config.marker_opacity,
+            rect_filled: false,
             editing_text_index: None,
             show_print_popup: false,
             cropped_preview: None,
@@ -553,10 +555,10 @@ impl eframe::App for OverlayApp {
                         else if sel.contains(pointer_pos) {
                             if self.current_tool == Tool::Text {
                                 self.redo_stack.clear();
-                                self.shapes.push(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: 2.0, tool: Tool::Text, text: String::new(), is_marker: false, opacity: 1.0 });
+                                self.shapes.push(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: 2.0, tool: Tool::Text, text: String::new(), is_marker: false, opacity: 1.0, rect_filled: false });
                                 self.editing_text_index = Some(self.shapes.len() - 1);
                             } else {
-                                self.active_shape = Some(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: if self.current_tool == Tool::Marker { 15.0 } else { 2.5 }, tool: self.current_tool, text: String::new(), is_marker: self.current_tool == Tool::Marker, opacity: if self.current_tool == Tool::Marker { self.marker_opacity } else { 1.0 } });
+                                self.active_shape = Some(Shape { points: vec![pointer_pos], color: self.current_color, stroke_width: if self.current_tool == Tool::Marker { 15.0 } else { 2.5 }, tool: self.current_tool, text: String::new(), is_marker: self.current_tool == Tool::Marker, opacity: if self.current_tool == Tool::Marker { self.marker_opacity } else { 1.0 }, rect_filled: if self.current_tool == Tool::Rect { self.rect_filled } else { false } });
                             }
                         }
                         else { self.selection = Some(Rect::from_two_pos(pointer_pos, pointer_pos)); self.is_selecting = true; self.start_pos = Some(pointer_pos); }
@@ -761,7 +763,17 @@ impl OverlayApp {
                 }
             }
             Tool::Line => { if shape.points.len() > 1 { painter.line_segment([shape.points[0], *shape.points.last().unwrap()], stroke); } }
-            Tool::Rect => { if shape.points.len() > 1 { painter.rect_stroke(Rect::from_two_pos(shape.points[0], *shape.points.last().unwrap()), 0.0, stroke); } }
+            Tool::Rect => {
+                if shape.points.len() > 1 {
+                    let r = Rect::from_two_pos(shape.points[0], *shape.points.last().unwrap());
+                    if shape.rect_filled {
+                        let fill_color = shape.color;
+                        painter.rect_filled(r, 0.0, fill_color);
+                    } else {
+                        painter.rect_stroke(r, 0.0, stroke);
+                    }
+                }
+            }
             Tool::Arrow => {
                 if shape.points.len() > 1 {
                     let start = shape.points[0];
@@ -811,7 +823,7 @@ impl OverlayApp {
                     ui.add_space(2.0);
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Arrow, egui::RichText::new(ARROW_RIGHT).color(icon_color))).on_hover_text("Arrow").clicked() { self.current_tool = Tool::Arrow; }
                     ui.add_space(2.0);
-                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Rect, egui::RichText::new(SQUARE).color(icon_color))).on_hover_text("Rectangle").clicked() { self.current_tool = Tool::Rect; }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Rect, egui::RichText::new(if self.rect_filled { SQUARE_FILL } else { SQUARE }).color(icon_color))).on_hover_text(if self.rect_filled { "Filled rectangle" } else { "Rectangle outline" }).clicked() { self.current_tool = Tool::Rect; }
                     ui.add_space(2.0);
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.current_tool == Tool::Marker, egui::RichText::new(MARKER).color(icon_color))).on_hover_text("Marker").clicked() { self.current_tool = Tool::Marker; }
                     ui.add_space(2.0);
@@ -862,8 +874,22 @@ impl OverlayApp {
                 });
             });
 
+        if self.current_tool == Tool::Rect {
+            let rect_bar_pos = egui::pos2(selection.max.x + spacing + 31.0, selection.max.y - 173.0 + 50.0);
+            egui::Window::new("rect_settings").fixed_pos(rect_bar_pos).title_bar(false).resizable(false).collapsible(false).frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0)).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(!self.rect_filled, egui::RichText::new(SQUARE).color(icon_color))).on_hover_text("Rectangle outline").clicked() {
+                        self.rect_filled = false;
+                    }
+                    if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::SelectableLabel::new(self.rect_filled, egui::RichText::new(SQUARE_FILL).color(icon_color))).on_hover_text("Filled rectangle").clicked() {
+                        self.rect_filled = true;
+                    }
+                });
+            });
+        }
+
         if self.current_tool == Tool::Marker {
-            let marker_bar_pos = egui::pos2(selection.max.x + spacing + 31.0, selection.max.y - 148.0 + 50.0);
+            let marker_bar_pos = egui::pos2(selection.max.x + spacing + 31.0, selection.max.y - 150.0 + 50.0);
             egui::Window::new("marker_settings").fixed_pos(marker_bar_pos).title_bar(false).resizable(false).collapsible(false).frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0)).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let rect = ui.allocate_at_least(egui::vec2(14.0, 14.0), egui::Sense::hover()).0;

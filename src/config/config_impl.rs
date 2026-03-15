@@ -119,6 +119,8 @@ pub struct Shape {
     pub text: String,
     pub is_marker: bool,
     pub opacity: f32,
+    /// When tool is Rect: true = filled, false = outline only
+    pub rect_filled: bool,
 }
 
 pub enum PendingAction {

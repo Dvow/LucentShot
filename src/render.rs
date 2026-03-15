@@ -112,7 +112,11 @@ pub fn render_and_crop(full_img: &DynamicImage, shapes: &[Shape], selection: efr
                     let rh = (p1.y * ppp - p2.y * ppp).abs();
                     if let Some(rect) = tiny_skia::Rect::from_xywh(rx, ry, rw, rh) {
                         let path = PathBuilder::from_rect(rect);
-                        pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+                        if shape.rect_filled {
+                            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+                        } else {
+                            pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+                        }
                     }
                 }
             }
