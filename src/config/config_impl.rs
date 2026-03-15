@@ -125,7 +125,9 @@ pub enum PendingAction {
     Copy,
     Save,
     Upload,
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
     Ocr,
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
     Speak,
     Print {
         printer: String,

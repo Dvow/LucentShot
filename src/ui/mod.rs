@@ -23,6 +23,7 @@ impl SettingsTab {
 pub struct SettingsWindowState {
     pub active_tab: SettingsTab,
     pub last_snapshot_down: bool,
+    #[cfg(feature = "ocr")]
     pub tts_voices_cache: Option<Vec<String>>,
 }
 
@@ -31,6 +32,7 @@ impl Default for SettingsWindowState {
         Self {
             active_tab: SettingsTab::General,
             last_snapshot_down: false,
+            #[cfg(feature = "ocr")]
             tts_voices_cache: None,
         }
     }
@@ -47,15 +49,15 @@ pub fn show_settings_window(
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
-            for tab in [
-                SettingsTab::General,
-                SettingsTab::Hotkeys,
-                SettingsTab::Formats,
-                SettingsTab::Tts,
-            ] {
-                let selected = state.active_tab == tab;
+            let tabs: &[SettingsTab] = if cfg!(feature = "ocr") {
+                &[SettingsTab::General, SettingsTab::Hotkeys, SettingsTab::Formats, SettingsTab::Tts]
+            } else {
+                &[SettingsTab::General, SettingsTab::Hotkeys, SettingsTab::Formats]
+            };
+            for tab in tabs {
+                let selected = state.active_tab == *tab;
                 if ui.selectable_label(selected, tab.label()).clicked() {
-                    state.active_tab = tab;
+                    state.active_tab = *tab;
                 }
             }
         });
@@ -66,7 +68,12 @@ pub fn show_settings_window(
             SettingsTab::General => render_general(ui, config),
             SettingsTab::Hotkeys => render_hotkeys(ctx, ui, state, config),
             SettingsTab::Formats => render_formats(ui, config),
-            SettingsTab::Tts => render_tts(ui, state, config),
+            SettingsTab::Tts => {
+                #[cfg(feature = "ocr")]
+                render_tts(ui, state, config);
+                #[cfg(not(feature = "ocr"))]
+                ui.label("OCR/TTS not available in this build.");
+            }
         }
     });
 }
@@ -331,6 +338,7 @@ fn render_formats(ui: &mut egui::Ui, config: &mut ConfigImpl) {
         });
 }
 
+#[cfg(feature = "ocr")]
 fn render_tts(ui: &mut egui::Ui, state: &mut SettingsWindowState, config: &mut ConfigImpl) {
     ui.add_space(6.0);
     ui.label("Voice");

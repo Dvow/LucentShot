@@ -1,5 +1,7 @@
 use arboard::{Clipboard, ImageData};
-use image::{DynamicImage, imageops::FilterType};
+use image::DynamicImage;
+#[cfg(feature = "ocr")]
+use image::imageops::FilterType;
 use image::codecs::jpeg::JpegEncoder;
 use anyhow::{Result, anyhow};
 use std::borrow::Cow;
@@ -112,14 +114,23 @@ pub fn show_ocr_error(msg: &str) {
         .show();
 }
 
+#[cfg(feature = "ocr")]
 pub fn image_to_text(img: &DynamicImage) -> Result<String> {
     image_to_text_tesseract(img)
 }
 
+#[cfg(not(feature = "ocr"))]
+pub fn image_to_text(_img: &DynamicImage) -> Result<String> {
+    Err(anyhow!("OCR not available. Rebuild with default features."))
+}
+
+#[cfg(feature = "ocr")]
 const OCR_SCALE: u32 = 3;
 
+#[cfg(feature = "ocr")]
 const DESKEW_THRESHOLD_DEG: f32 = 0.8;
 
+#[cfg(feature = "ocr")]
 fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 
@@ -167,6 +178,7 @@ fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
     best_angle
 }
 
+#[cfg(feature = "ocr")]
 fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 
@@ -185,6 +197,7 @@ fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
     DynamicImage::ImageLuma8(rotated)
 }
 
+#[cfg(feature = "ocr")]
 fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     use imageproc::contrast;
 
@@ -210,8 +223,10 @@ fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
     contrast::threshold(&gray, level)
 }
 
+#[cfg(feature = "ocr")]
 static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
 
+#[cfg(feature = "ocr")]
 static TESSDATA_DIR: std::sync::LazyLock<std::path::PathBuf> =
     std::sync::LazyLock::new(|| {
         let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
@@ -221,9 +236,12 @@ static TESSDATA_DIR: std::sync::LazyLock<std::path::PathBuf> =
         tess_dir
     });
 
-use tesseract_static::tesseract_plumbing::TessBaseApi;
+#[cfg(feature = "ocr")]
 use std::ffi::CString;
+#[cfg(feature = "ocr")]
+use tesseract_static::tesseract_plumbing::TessBaseApi;
 
+#[cfg(feature = "ocr")]
 static TESS_ENGINE: std::sync::LazyLock<std::sync::Mutex<TessBaseApi>> =
     std::sync::LazyLock::new(|| {
         let mut api = TessBaseApi::create();
@@ -238,12 +256,17 @@ static TESS_ENGINE: std::sync::LazyLock<std::sync::Mutex<TessBaseApi>> =
         std::sync::Mutex::new(api)
     });
 
+#[cfg(feature = "ocr")]
 pub fn warm_ocr_engine() {
     std::thread::spawn(|| {
         std::sync::LazyLock::force(&TESS_ENGINE);
     });
 }
 
+#[cfg(not(feature = "ocr"))]
+pub fn warm_ocr_engine() {}
+
+#[cfg(feature = "ocr")]
 fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     let gray = preprocess_for_ocr(img);
     let (width, height) = gray.dimensions();
@@ -276,6 +299,7 @@ fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
     }
 }
 
+#[cfg(feature = "ocr")]
 fn fix_ocr_slashed_zero(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -292,9 +316,11 @@ fn fix_ocr_slashed_zero(s: &str) -> String {
     out
 }
 
+#[cfg(feature = "ocr")]
 static TTS_ENGINE: std::sync::LazyLock<std::sync::Mutex<Option<tts::Tts>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
 
+#[cfg(feature = "ocr")]
 pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     let text = image_to_text(img)?;
     let normalized = normalize_tts_text(&text);
@@ -349,6 +375,12 @@ pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "ocr"))]
+pub fn image_to_speech(_img: &DynamicImage) -> Result<()> {
+    Err(anyhow!("Image to Speech not available. Rebuild with default features."))
+}
+
+#[cfg(feature = "ocr")]
 pub fn get_tts_voices() -> Vec<String> {
     let guard = match TTS_ENGINE.lock() {
         Ok(g) => g,
@@ -362,6 +394,13 @@ pub fn get_tts_voices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(not(feature = "ocr"))]
+#[allow(dead_code)]
+pub fn get_tts_voices() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(feature = "ocr")]
 fn normalize_tts_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

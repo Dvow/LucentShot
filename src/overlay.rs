@@ -851,7 +851,9 @@ impl OverlayApp {
                 ui.horizontal(|ui| {
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(CLOUD).color(icon_color))).on_hover_text("Cloud Upload (Ctrl+D)").clicked() { self.execute_action_immediate(ctx, PendingAction::Upload); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(GOOGLE).color(icon_color))).on_hover_text("Google Image Search (Ctrl+G)").clicked() { self.execute_action_immediate(ctx, PendingAction::Google); }
+                    #[cfg(feature = "ocr")]
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ALIGN_LEFT).color(icon_color))).on_hover_text("Image to Text (OCR)").clicked() { self.execute_action_immediate(ctx, PendingAction::Ocr); }
+                    #[cfg(feature = "ocr")]
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(ACCOUNT_VOICE).color(icon_color))).on_hover_text("Image to Speech").clicked() { self.execute_action_immediate(ctx, PendingAction::Speak); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(PRINT).color(icon_color))).on_hover_text("Print Selection (Ctrl+P)").clicked() { self.prepare_print_preview(ctx, selection); }
                     if ui.add_sized([BTN_SIZE, BTN_SIZE], egui::Button::new(egui::RichText::new(SAVE).color(icon_color))).on_hover_text("Save (Ctrl+S)").clicked() { self.execute_action_immediate(ctx, PendingAction::Save); }
