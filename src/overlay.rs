@@ -842,10 +842,10 @@ impl OverlayApp {
                 });
             });
 
-        let h_width = 280.0;
         egui::Window::new("actions")
-            .fixed_pos(egui::pos2(selection.max.x - h_width + 50.0, selection.max.y + spacing))
-            .title_bar(false).resizable(false).collapsible(false).fixed_size([h_width, BTN_SIZE + 8.0])
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(egui::pos2(selection.max.x + spacing - 3.0, selection.max.y + spacing))
+            .title_bar(false).resizable(false).collapsible(false).auto_sized()
             .frame(egui::Frame::window(&ctx.style()).fill(toolbar_color).stroke(Stroke::new(1.0, Color32::GRAY)).inner_margin(4.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
