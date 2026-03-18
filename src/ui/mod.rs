@@ -22,7 +22,7 @@ impl SettingsTab {
 
 pub struct SettingsWindowState {
     pub active_tab: SettingsTab,
-    pub last_snapshot_down: bool,
+    pub last_hotkey_vk_down: Option<u32>,
     #[cfg(feature = "ocr")]
     pub tts_voices_cache: Option<Vec<String>>,
 }
@@ -31,7 +31,7 @@ impl Default for SettingsWindowState {
     fn default() -> Self {
         Self {
             active_tab: SettingsTab::General,
-            last_snapshot_down: false,
+            last_hotkey_vk_down: None,
             #[cfg(feature = "ocr")]
             tts_voices_cache: None,
         }
@@ -66,7 +66,7 @@ pub fn show_settings_window(
 
         match state.active_tab {
             SettingsTab::General => render_general(ui, config),
-            SettingsTab::Hotkeys => render_hotkeys(ctx, ui, state, config),
+            SettingsTab::Hotkeys => render_hotkeys(ui, state, config),
             SettingsTab::Formats => render_formats(ui, config),
             SettingsTab::Tts => {
                 #[cfg(feature = "ocr")]
@@ -123,12 +123,7 @@ fn render_general(ui: &mut egui::Ui, config: &mut ConfigImpl) {
         });
 }
 
-fn render_hotkeys(
-    ctx: &egui::Context,
-    ui: &mut egui::Ui,
-    state: &mut SettingsWindowState,
-    config: &mut ConfigImpl,
-) {
+fn render_hotkeys(ui: &mut egui::Ui, state: &mut SettingsWindowState, config: &mut ConfigImpl) {
     ui.add_space(6.0);
     let mut binding_display = format_binding(
         config.hotkey_general_key,
@@ -149,10 +144,9 @@ fn render_hotkeys(
             );
             if config.hotkey_general_enabled {
                 capture_hotkey_input(
-                    ctx,
                     &response,
                     config,
-                    &mut state.last_snapshot_down,
+                    &mut state.last_hotkey_vk_down,
                 );
             }
             ui.end_row();
@@ -193,85 +187,133 @@ fn render_hotkeys(
 }
 
 fn capture_hotkey_input(
-    ctx: &egui::Context,
     response: &egui::Response,
     config: &mut ConfigImpl,
-    last_snapshot_down: &mut bool,
+    last_hotkey_vk_down: &mut Option<u32>,
 ) {
     if !response.has_focus() {
+        *last_hotkey_vk_down = None;
         return;
     }
 
-    let mut next_key: Option<u32> = None;
-    let mut next_ctrl = None;
-    let mut next_shift = None;
-    let mut next_alt = None;
-    let mut next_win = None;
-    ctx.input(|i| {
-        for event in &i.events {
-            if let egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-            {
-                if *key == egui::Key::Backspace || *key == egui::Key::Delete {
-                    next_key = Some(0);
-                    next_ctrl = Some(false);
-                    next_shift = Some(false);
-                    next_alt = Some(false);
-                    next_win = Some(false);
-                } else if *key != egui::Key::Escape {
-                    if let Some(vk) = crate::hotkey::egui_key_to_vk(*key) {
-                        next_key = Some(vk);
-                        next_ctrl = Some(modifiers.ctrl);
-                        next_shift = Some(modifiers.shift);
-                        next_alt = Some(modifiers.alt);
-                        next_win = Some(modifiers.command);
-                    }
-                }
-                break;
-            }
-        }
-    });
-
-    if next_key.is_none() {
-        let snapshot_down = unsafe {
-            (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
-                windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as i32,
-            ) as u16) & 0x8000 != 0
-        };
-        if snapshot_down && !*last_snapshot_down {
-            next_key = Some(
-                windows::Win32::UI::Input::KeyboardAndMouse::VK_SNAPSHOT.0 as u32,
-            );
-            next_ctrl = Some(false);
-            next_shift = Some(false);
-            next_alt = Some(false);
-            next_win = Some(false);
-        }
-        *last_snapshot_down = snapshot_down;
+    let current_vk_down = current_hotkey_vk_down();
+    if current_vk_down.is_none() {
+        *last_hotkey_vk_down = None;
+        return;
     }
 
-    if let Some(key) = next_key {
-        if key == 0 {
+    if current_vk_down == *last_hotkey_vk_down {
+        return;
+    }
+
+    *last_hotkey_vk_down = current_vk_down;
+
+    if let Some(vk) = current_vk_down {
+        if vk == windows::Win32::UI::Input::KeyboardAndMouse::VK_BACK.0 as u32
+            || vk == windows::Win32::UI::Input::KeyboardAndMouse::VK_DELETE.0 as u32
+        {
             config.hotkey_general_key = None;
-        } else {
-            config.hotkey_general_key = Some(key);
+            config.hotkey_general_ctrl = false;
+            config.hotkey_general_shift = false;
+            config.hotkey_general_alt = false;
+            config.hotkey_general_win = false;
+        } else if vk != windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE.0 as u32 {
+            config.hotkey_general_key = Some(vk);
+            config.hotkey_general_ctrl = is_ctrl_down();
+            config.hotkey_general_shift = is_shift_down();
+            config.hotkey_general_alt = is_alt_down();
+            config.hotkey_general_win = is_windows_key_down();
         }
     }
-    if let Some(value) = next_ctrl {
-        config.hotkey_general_ctrl = value;
+}
+
+fn current_hotkey_vk_down() -> Option<u32> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT,
+        VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SNAPSHOT, VK_SPACE, VK_TAB, VK_UP,
+    };
+
+    for vk in [
+        VK_SNAPSHOT.0 as u32,
+        VK_BACK.0 as u32,
+        VK_DELETE.0 as u32,
+        VK_ESCAPE.0 as u32,
+        VK_TAB.0 as u32,
+        VK_RETURN.0 as u32,
+        VK_SPACE.0 as u32,
+        VK_INSERT.0 as u32,
+        VK_HOME.0 as u32,
+        VK_END.0 as u32,
+        VK_PRIOR.0 as u32,
+        VK_NEXT.0 as u32,
+        VK_UP.0 as u32,
+        VK_DOWN.0 as u32,
+        VK_LEFT.0 as u32,
+        VK_RIGHT.0 as u32,
+    ] {
+        if is_vk_down(vk) {
+            return Some(vk);
+        }
     }
-    if let Some(value) = next_shift {
-        config.hotkey_general_shift = value;
+
+    for vk in 0x30..=0x39 {
+        if is_vk_down(vk) {
+            return Some(vk);
+        }
     }
-    if let Some(value) = next_alt {
-        config.hotkey_general_alt = value;
+
+    for vk in 0x41..=0x5A {
+        if is_vk_down(vk) {
+            return Some(vk);
+        }
     }
-    if let Some(value) = next_win {
-        config.hotkey_general_win = value;
+
+    for vk in 0x70..=0x7B {
+        if is_vk_down(vk) {
+            return Some(vk);
+        }
+    }
+
+    None
+}
+
+fn is_vk_down(vk: u32) -> bool {
+    unsafe {
+        (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) as u16) & 0x8000
+            != 0
+    }
+}
+
+fn is_ctrl_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_LCONTROL, VK_RCONTROL};
+
+    is_vk_down(VK_CONTROL.0 as u32)
+        || is_vk_down(VK_LCONTROL.0 as u32)
+        || is_vk_down(VK_RCONTROL.0 as u32)
+}
+
+fn is_shift_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
+
+    is_vk_down(VK_SHIFT.0 as u32)
+        || is_vk_down(VK_LSHIFT.0 as u32)
+        || is_vk_down(VK_RSHIFT.0 as u32)
+}
+
+fn is_alt_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LMENU, VK_MENU, VK_RMENU};
+
+    is_vk_down(VK_MENU.0 as u32)
+        || is_vk_down(VK_LMENU.0 as u32)
+        || is_vk_down(VK_RMENU.0 as u32)
+}
+
+fn is_windows_key_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
+
+    unsafe {
+        ((GetAsyncKeyState(VK_LWIN.0 as i32) as u16) & 0x8000 != 0)
+            || ((GetAsyncKeyState(VK_RWIN.0 as i32) as u16) & 0x8000 != 0)
     }
 }
 
