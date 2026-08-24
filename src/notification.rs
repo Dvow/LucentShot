@@ -1,13 +1,12 @@
 pub fn show(title: &str, body: &str) {
     use std::path::Path;
     use std::sync::OnceLock;
-    use tauri_winrt_notification::{Toast, IconCrop};
+    use tauri_winrt_notification::{IconCrop, Toast};
 
     static ICON_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
     let path = ICON_PATH.get_or_init(|| {
-        let png = include_bytes!("icon/icon.png");
         let path = std::env::temp_dir().join("lightshot_clone_icon.png");
-        let _ = std::fs::write(&path, png);
+        let _ = std::fs::write(&path, include_bytes!("icon/icon.png"));
         path
     });
 
@@ -17,5 +16,13 @@ pub fn show(title: &str, body: &str) {
     if path.exists() {
         toast = toast.icon(Path::new(path), IconCrop::Circular, "Lightshot Clone");
     }
-    let _ = toast.show();
+    if let Err(err) = toast.show() {
+        eprintln!("Notification failed: {err}");
+    }
+}
+
+pub fn maybe(enabled: bool, title: &str, body: &str) {
+    if enabled {
+        show(title, body);
+    }
 }

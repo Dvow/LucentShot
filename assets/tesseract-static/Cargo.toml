@@ -16,14 +16,5 @@ license = "Apache-2.0"
 name = "tesseract_static"
 path = "src/lib.rs"
 
-[dependencies.dlopen]
-version = "0.1.8"
-
-[dependencies.lazy_static]
-version = "1.5.0"
-
-[dependencies.thiserror]
-version = "2.0.11"
-
-[features]
-default = []
+[dependencies]
+dlopen = "0.1.8"

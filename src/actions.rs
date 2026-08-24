@@ -1,63 +1,92 @@
+use crate::config::ImageFormat;
+use anyhow::{anyhow, Result};
 use arboard::{Clipboard, ImageData};
-use image::DynamicImage;
-#[cfg(feature = "ocr")]
-use image::imageops::FilterType;
 use image::codecs::jpeg::JpegEncoder;
-use anyhow::{Result, anyhow};
+use image::DynamicImage;
+use serde_json::json;
 use std::borrow::Cow;
 use std::io::Cursor;
-use std::fs;
-use serde_json::json;
+use std::sync::LazyLock;
 
-pub enum CopyResult {
-    Image,
+static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .expect("reqwest client")
+});
+
+pub enum Export {
+    Copy,
+    Save,
+    Upload,
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    Ocr,
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    Speak,
+    Print {
+        printer: String,
+        copies: i32,
+        landscape: bool,
+        grayscale: bool,
+        paper: String,
+    },
+    Google,
 }
 
-pub fn copy_to_clipboard(img: &DynamicImage) -> Result<CopyResult> {
+pub fn copy_image(img: &DynamicImage) -> Result<()> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Clipboard: {e}"))?;
-    clipboard
-        .set_image(ImageData {
-            width: width as usize,
-            height: height as usize,
-            bytes: Cow::Owned(rgba.into_raw()),
-        })
-        .map_err(|e| anyhow!("Clipboard set_image: {e}"))?;
-    Ok(CopyResult::Image)
-}
-
-pub fn set_clipboard_text(text: &str) -> Result<()> {
     Clipboard::new()
-        .and_then(|mut c| c.set_text(text.to_owned()))
+        .and_then(|mut clipboard| {
+            clipboard.set_image(ImageData {
+                width: width as usize,
+                height: height as usize,
+                bytes: Cow::Owned(rgba.into_raw()),
+            })
+        })
         .map_err(|e| anyhow!("Clipboard: {e}"))
 }
 
-pub fn save_to_file(img: &DynamicImage) -> Result<bool> {
-    let config = crate::config::cfg();
-    let (ext, filter_label) = format_extension_and_label(config.format);
+pub fn copy_text(text: &str) -> Result<()> {
+    Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
+        .map_err(|e| anyhow!("Clipboard: {e}"))
+}
+
+pub fn save_image(img: &DynamicImage) -> Result<bool> {
+    let config = crate::config::get();
+    let ext = config.format.extension();
     let start_dir = dirs::picture_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let mut i = 1;
-    let mut file_name = format!("screenshot_{i}.{ext}");
+    let mut index = 1;
+    let mut file_name = format!("screenshot_{index}.{ext}");
     while start_dir.join(&file_name).exists() {
-        i += 1;
-        file_name = format!("screenshot_{i}.{ext}");
+        index += 1;
+        file_name = format!("screenshot_{index}.{ext}");
     }
 
-    if let Some(path) = rfd::FileDialog::new()
-        .add_filter(filter_label, &[ext])
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter(config.format.label(), &[ext])
         .set_directory(&start_dir)
         .set_file_name(&file_name)
         .save_file()
-    {
-        let path = if path.extension().is_some() { path } else { path.with_extension(ext) };
-        let _ = save_image_with_config(img, &path, config.format, config.jpeg_quality);
-        return Ok(true);
-    }
-    Ok(false)
+    else {
+        return Ok(false);
+    };
+
+    let path = if path.extension().is_some() {
+        path
+    } else {
+        path.with_extension(ext)
+    };
+    write_image(img, &path, config.format, config.jpeg_quality)?;
+    Ok(true)
 }
 
-pub fn pick_save_path(default_name: &str, filter_label: &str, ext: &str) -> Option<std::path::PathBuf> {
+pub fn pick_save_path(
+    default_name: &str,
+    filter_label: &str,
+    ext: &str,
+) -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .add_filter(filter_label, &[ext])
         .set_file_name(default_name)
@@ -68,345 +97,8 @@ pub fn open_url(url: &str) -> Result<()> {
     webbrowser::open(url).map_err(|e| anyhow!("Failed to open URL: {e}"))
 }
 
-static REQWEST_CLIENT: std::sync::LazyLock<reqwest::blocking::Client> =
-    std::sync::LazyLock::new(|| {
-        reqwest::blocking::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()
-            .expect("reqwest client")
-    });
-
-fn upload_to_anonymous_host(img: &DynamicImage) -> Result<String> {
-    let config = crate::config::cfg();
-    let (bytes, ext, mime) = encode_image_for_upload(img, config.format, config.jpeg_quality)?;
-
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("reqtype", "fileupload")
-        .part("fileToUpload", reqwest::blocking::multipart::Part::bytes(bytes)
-            .file_name(format!("screenshot.{ext}"))
-            .mime_str(mime)?);
-
-    let resp = REQWEST_CLIENT.post("https://catbox.moe/user/api.php")
-        .multipart(form)
-        .send()?;
-
-    if !resp.status().is_success() {
-        let err_body = resp.text().unwrap_or_else(|e| format!("Failed to read error body: {e}"));
-        return Err(anyhow!("Host failed: {err_body}"));
-    }
-
-    Ok(resp.text()?)
-}
-
-pub fn google_search(img: &DynamicImage) -> Result<()> {
-    let direct_url = upload_to_anonymous_host(img)?;
-    let search_url = format!("https://lens.google.com/uploadbyurl?url={direct_url}");
-    open_url(&search_url)?;
-    Ok(())
-}
-
-pub fn show_ocr_error(msg: &str) {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("OCR Error")
-        .set_description(msg)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-#[cfg(feature = "ocr")]
-pub fn image_to_text(img: &DynamicImage) -> Result<String> {
-    image_to_text_tesseract(img)
-}
-
-#[cfg(not(feature = "ocr"))]
-pub fn image_to_text(_img: &DynamicImage) -> Result<String> {
-    Err(anyhow!("OCR not available. Rebuild with default features."))
-}
-
-#[cfg(feature = "ocr")]
-const OCR_SCALE: u32 = 3;
-
-#[cfg(feature = "ocr")]
-const DESKEW_THRESHOLD_DEG: f32 = 0.8;
-
-#[cfg(feature = "ocr")]
-fn detect_skew_angle(binary: &image::GrayImage) -> f32 {
-    use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
-
-    let (w, h) = binary.dimensions();
-    if w < 20 || h < 20 {
-        return 0.0;
-    }
-
-    let mut best_angle = 0.0f32;
-    let mut best_variance = 0.0f64;
-
-    for deg in (-45..=45).step_by(3) {
-        let theta = (deg as f32).to_radians();
-        let rotated = rotate_about_center(
-            binary,
-            theta,
-            Interpolation::Bilinear,
-            image::Luma([255u8]),
-        );
-
-        let mut row_sums: Vec<u64> = vec![0; rotated.height() as usize];
-        for y in 0..rotated.height() {
-            for x in 0..rotated.width() {
-                let p = rotated.get_pixel(x, y)[0];
-                row_sums[y as usize] += p as u64;
-            }
-        }
-
-        let mean = row_sums.iter().sum::<u64>() as f64 / row_sums.len() as f64;
-        let variance = row_sums
-            .iter()
-            .map(|&s| {
-                let d = s as f64 - mean;
-                d * d
-            })
-            .sum::<f64>()
-            / row_sums.len() as f64;
-
-        if variance > best_variance {
-            best_variance = variance;
-            best_angle = deg as f32;
-        }
-    }
-
-    best_angle
-}
-
-#[cfg(feature = "ocr")]
-fn deskew_image(img: &DynamicImage, angle_deg: f32) -> DynamicImage {
-    use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
-
-    if angle_deg.abs() < DESKEW_THRESHOLD_DEG {
-        return img.clone();
-    }
-
-    let gray = img.to_luma8();
-    let theta = angle_deg.to_radians();
-    let rotated = rotate_about_center(
-        &gray,
-        theta,
-        Interpolation::Bilinear,
-        image::Luma([255u8]),
-    );
-    DynamicImage::ImageLuma8(rotated)
-}
-
-#[cfg(feature = "ocr")]
-fn preprocess_for_ocr(img: &DynamicImage) -> image::GrayImage {
-    use imageproc::contrast;
-
-    let gray0 = img.to_luma8();
-    let level0 = contrast::otsu_level(&gray0);
-    let binary0 = contrast::threshold(&gray0, level0);
-    let skew_angle = detect_skew_angle(&binary0);
-    let img = deskew_image(img, skew_angle);
-
-    let w = img.width();
-    let h = img.height();
-    let new_w = w * OCR_SCALE;
-    let new_h = h * OCR_SCALE;
-    let img = DynamicImage::ImageRgba8(image::imageops::resize(
-        &img.to_rgba8(),
-        new_w,
-        new_h,
-        FilterType::Lanczos3,
-    ));
-
-    let gray = img.to_luma8();
-    let level = contrast::otsu_level(&gray);
-    contrast::threshold(&gray, level)
-}
-
-#[cfg(feature = "ocr")]
-static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
-
-#[cfg(feature = "ocr")]
-static TESSDATA_DIR: std::sync::LazyLock<std::path::PathBuf> =
-    std::sync::LazyLock::new(|| {
-        let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
-        std::fs::create_dir_all(&tess_dir).expect("Failed to create tessdata dir");
-        std::fs::write(tess_dir.join("eng.traineddata"), ENG_TRAINEDDATA)
-            .expect("Failed to write eng.traineddata");
-        tess_dir
-    });
-
-#[cfg(feature = "ocr")]
-use std::ffi::CString;
-#[cfg(feature = "ocr")]
-use tesseract_static::tesseract_plumbing::TessBaseApi;
-
-#[cfg(feature = "ocr")]
-static TESS_ENGINE: std::sync::LazyLock<std::sync::Mutex<TessBaseApi>> =
-    std::sync::LazyLock::new(|| {
-        let mut api = TessBaseApi::create();
-        let datapath = CString::new(TESSDATA_DIR.to_string_lossy().as_bytes()).unwrap();
-        let lang = CString::new("eng").unwrap();
-        api.init_2(Some(datapath.as_c_str()), Some(lang.as_c_str()))
-            .expect("Tesseract init failed");
-        let ps_mode = CString::new("tessedit_pageseg_mode").unwrap();
-        let ps_val = CString::new("6").unwrap();
-        api.set_variable(ps_mode.as_c_str(), ps_val.as_c_str())
-            .expect("Tesseract set_variable failed");
-        std::sync::Mutex::new(api)
-    });
-
-#[cfg(feature = "ocr")]
-pub fn warm_ocr_engine() {
-    std::thread::spawn(|| {
-        std::sync::LazyLock::force(&TESS_ENGINE);
-    });
-}
-
-#[cfg(not(feature = "ocr"))]
-pub fn warm_ocr_engine() {}
-
-#[cfg(feature = "ocr")]
-fn image_to_text_tesseract(img: &DynamicImage) -> Result<String> {
-    let gray = preprocess_for_ocr(img);
-    let (width, height) = gray.dimensions();
-    let frame_data = gray.as_raw();
-
-    let mut api = TESS_ENGINE
-        .lock()
-        .map_err(|e| anyhow!("Tesseract lock poisoned: {e}"))?;
-
-    api.set_image(
-        frame_data,
-        width as i32,
-        height as i32,
-        1,
-        width as i32,
-    )
-    .map_err(|e| anyhow!("Tesseract set_image failed: {e:?}"))?;
-    api.set_source_resolution(300);
-    api.recognize().map_err(|e| anyhow!("Tesseract recognize failed: {e:?}"))?;
-    let raw = api
-        .get_utf8_text()
-        .map_err(|e| anyhow!("Tesseract get_text failed: {e:?}"))?;
-    let text = raw.as_ref().to_string_lossy().into_owned();
-
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        Err(anyhow!("No text detected"))
-    } else {
-        Ok(fix_ocr_slashed_zero(trimmed))
-    }
-}
-
-#[cfg(feature = "ocr")]
-fn fix_ocr_slashed_zero(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        let is_zero_like = c == '€' || c == '@';
-        let prev_digit_or_dot = out.chars().last().map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false);
-        let next_digit_or_dot = chars.peek().map(|&c| c.is_ascii_digit() || c == '.').unwrap_or(false);
-        if is_zero_like && (prev_digit_or_dot || next_digit_or_dot) {
-            out.push('0');
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-#[cfg(feature = "ocr")]
-static TTS_ENGINE: std::sync::LazyLock<std::sync::Mutex<Option<tts::Tts>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(tts::Tts::default().ok()));
-
-#[cfg(feature = "ocr")]
-pub fn image_to_speech(img: &DynamicImage) -> Result<()> {
-    let text = image_to_text(img)?;
-    let normalized = normalize_tts_text(&text);
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("No text detected"));
-    }
-
-    let mut guard = TTS_ENGINE.lock().map_err(|e| anyhow!("TTS lock poisoned: {e}"))?;
-    let Some(ref mut tts) = *guard else {
-        return Err(anyhow!("TTS not available on this system"));
-    };
-
-    let settings = crate::config::cfg();
-    let feat = tts.supported_features();
-
-    if feat.voice {
-        let voice_name = settings.tts_voice.trim();
-        if !voice_name.is_empty() {
-            if let Ok(voices) = tts.voices() {
-                if let Some(voice) = voices.into_iter().find(|v| v.name() == voice_name) {
-                    let _ = tts.set_voice(&voice);
-                }
-            }
-        }
-    }
-    if feat.rate {
-        let min_r = tts.min_rate();
-        let max_r = tts.max_rate();
-        let norm_r = tts.normal_rate();
-        let rate = norm_r + (settings.tts_rate as f32 / 10.0) * (max_r - min_r) * 0.2;
-        let rate = rate.clamp(min_r, max_r);
-        let _ = tts.set_rate(rate);
-    }
-    if feat.volume {
-        let min_v = tts.min_volume();
-        let max_v = tts.max_volume();
-        let vol = min_v + (settings.tts_volume as f32 / 100.0) * (max_v - min_v);
-        let vol = vol.clamp(min_v, max_v);
-        let _ = tts.set_volume(vol);
-    }
-
-    tts.speak(trimmed, true).map_err(|e| anyhow!("TTS speak: {e:?}"))?;
-    drop(guard);
-
-    while {
-        let g = TTS_ENGINE.lock().unwrap();
-        g.as_ref().and_then(|t| t.is_speaking().ok()).unwrap_or(false)
-    } {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "ocr"))]
-pub fn image_to_speech(_img: &DynamicImage) -> Result<()> {
-    Err(anyhow!("Image to Speech not available. Rebuild with default features."))
-}
-
-#[cfg(feature = "ocr")]
-pub fn get_tts_voices() -> Vec<String> {
-    let guard = match TTS_ENGINE.lock() {
-        Ok(g) => g,
-        Err(_) => return Vec::new(),
-    };
-    let Some(ref tts) = *guard else {
-        return Vec::new();
-    };
-    tts.voices()
-        .map(|v| v.into_iter().map(|voice| voice.name()).collect())
-        .unwrap_or_default()
-}
-
-#[cfg(not(feature = "ocr"))]
-#[allow(dead_code)]
-pub fn get_tts_voices() -> Vec<String> {
-    Vec::new()
-}
-
-#[cfg(feature = "ocr")]
-fn normalize_tts_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
-    let img_url = upload_to_anonymous_host(img)?;
+pub fn upload_prntsc(img: &DynamicImage) -> Result<String> {
+    let img_url = upload_anonymous(img)?;
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "save",
@@ -419,42 +111,72 @@ pub fn prntsc_upload(img: &DynamicImage) -> Result<String> {
         }
     });
 
-    let api_resp = REQWEST_CLIENT.post("https://api.prntscr.com/v1/")
+    let api_json: serde_json::Value = HTTP
+        .post("https://api.prntscr.com/v1/")
         .json(&payload)
+        .send()?
+        .json()?;
+    api_json["result"]["url"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("Lightshot API failed: {api_json:?}"))
+}
+
+pub fn google_search(img: &DynamicImage) -> Result<()> {
+    let direct_url = upload_anonymous(img)?;
+    open_url(&format!(
+        "https://lens.google.com/uploadbyurl?url={direct_url}"
+    ))
+}
+
+pub fn apply_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool) -> Result<()> {
+    if !auto_close_upload {
+        open_url(url)?;
+    }
+    if auto_copy_link {
+        copy_text(url)?;
+    }
+    Ok(())
+}
+
+fn upload_anonymous(img: &DynamicImage) -> Result<String> {
+    let config = crate::config::get();
+    let bytes = encode_image(img, config.format, config.jpeg_quality)?;
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("reqtype", "fileupload")
+        .part(
+            "fileToUpload",
+            reqwest::blocking::multipart::Part::bytes(bytes)
+                .file_name(format!("screenshot.{}", config.format.extension()))
+                .mime_str(config.format.mime())?,
+        );
+
+    let resp = HTTP
+        .post("https://catbox.moe/user/api.php")
+        .multipart(form)
         .send()?;
-
-    let api_json: serde_json::Value = api_resp.json()?;
-    let prnt_url = api_json["result"]["url"].as_str()
-        .ok_or_else(|| anyhow!("Lightshot API failed: {api_json:?}"))?;
-
-    Ok(prnt_url.to_string())
+    if !resp.status().is_success() {
+        let err_body = resp
+            .text()
+            .unwrap_or_else(|e| format!("Failed to read error body: {e}"));
+        return Err(anyhow!("Host failed: {err_body}"));
+    }
+    Ok(resp.text()?)
 }
 
-pub fn get_printers() -> Vec<String> {
+pub fn printers() -> Vec<String> {
     use winprint::printer::PrinterDevice;
-    match PrinterDevice::all() {
-        Ok(devices) => {
-            let names: Vec<String> = devices.into_iter().map(|d| d.name().to_string()).collect();
-            if names.is_empty() {
-                vec!["Microsoft Print to PDF".to_string()]
-            } else {
-                names
-            }
-        }
-        Err(_) => vec!["Microsoft Print to PDF".to_string()]
+    let names: Vec<String> = PrinterDevice::all()
+        .map(|devices| devices.into_iter().map(|d| d.name().to_string()).collect())
+        .unwrap_or_default();
+    if names.is_empty() {
+        vec!["Microsoft Print to PDF".to_string()]
+    } else {
+        names
     }
 }
 
-fn paper_size_to_predefined(paper: &str) -> Option<winprint::ticket::PredefinedMediaName> {
-    match paper.trim() {
-        "A4" => Some(winprint::ticket::PredefinedMediaName::ISOA4),
-        "Letter" => Some(winprint::ticket::PredefinedMediaName::NorthAmericaLetter),
-        "Legal" => Some(winprint::ticket::PredefinedMediaName::NorthAmericaLegal),
-        _ => winprint::ticket::PredefinedMediaName::try_from(paper).ok(),
-    }
-}
-
-pub fn print_image_to(
+pub fn print_image(
     img: &DynamicImage,
     printer_name: &str,
     copies: i32,
@@ -462,25 +184,26 @@ pub fn print_image_to(
     grayscale: bool,
     paper_size: &str,
 ) -> Result<()> {
+    use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
+    use winprint::ticket::{
+        Copies, FeatureOptionPack, FeatureOptionPackWithPredefined, PageOrientation,
+        PageOutputColor, PredefinedPageOrientation, PredefinedPageOutputColor, PrintCapabilities,
+        PrintTicketBuilder,
+    };
+
     let temp_path = std::env::temp_dir().join("lightshot_print.png");
     img.save(&temp_path)?;
-
-    {
-        use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
-        use winprint::ticket::{Copies, FeatureOptionPack, FeatureOptionPackWithPredefined, PrintCapabilities, PrintTicketBuilder};
-        use winprint::ticket::{PredefinedPageOrientation, PredefinedPageOutputColor};
-
-        let devices = PrinterDevice::all().map_err(|e| anyhow!("List printers: {e:?}"))?;
-        let device = devices
+    let result = (|| {
+        let device = PrinterDevice::all()
+            .map_err(|e| anyhow!("List printers: {e:?}"))?
             .into_iter()
             .find(|d| d.name() == printer_name)
             .ok_or_else(|| anyhow!("Printer not found: {printer_name}"))?;
 
-        let capabilities = PrintCapabilities::fetch(&device)
-            .map_err(|e| anyhow!("Fetch capabilities: {e:?}"))?;
-
-        let mut builder = PrintTicketBuilder::new(&device).map_err(|e| anyhow!("Print ticket: {e:?}"))?;
-
+        let capabilities =
+            PrintCapabilities::fetch(&device).map_err(|e| anyhow!("Fetch capabilities: {e:?}"))?;
+        let mut builder =
+            PrintTicketBuilder::new(&device).map_err(|e| anyhow!("Print ticket: {e:?}"))?;
         builder.merge(Copies(copies.clamp(1, 9999) as u16))?;
 
         let orient = if landscape {
@@ -488,8 +211,8 @@ pub fn print_image_to(
         } else {
             PredefinedPageOrientation::Portrait
         };
-        if let Some(opt) = winprint::ticket::PageOrientation::list(&capabilities)
-            .find(|o| o.as_predefined_name() == Some(orient))
+        if let Some(opt) =
+            PageOrientation::list(&capabilities).find(|o| o.as_predefined_name() == Some(orient))
         {
             let _ = builder.merge(opt);
         }
@@ -499,86 +222,68 @@ pub fn print_image_to(
         } else {
             PredefinedPageOutputColor::Color
         };
-        if let Some(opt) = winprint::ticket::PageOutputColor::list(&capabilities)
-            .find(|o| o.as_predefined_name() == Some(color))
+        if let Some(opt) =
+            PageOutputColor::list(&capabilities).find(|o| o.as_predefined_name() == Some(color))
         {
             let _ = builder.merge(opt);
         }
 
-        if let Some(predef) = paper_size_to_predefined(paper_size) {
-            if let Some(media) = capabilities
+        if let Some(predef) = paper_media(paper_size) {
+            let media = capabilities
                 .page_media_sizes()
-                .find(|m| m.as_predefined_name() == Some(predef))
-            {
+                .find(|m| m.as_predefined_name() == Some(predef));
+            if let Some(media) = media {
                 let _ = builder.merge(media);
             }
         }
 
-        let ticket = builder.build().map_err(|e| anyhow!("Build ticket: {e:?}"))?;
-        let printer = ImagePrinter::new(device);
-        printer
+        let ticket = builder
+            .build()
+            .map_err(|e| anyhow!("Build ticket: {e:?}"))?;
+        ImagePrinter::new(device)
             .print(&temp_path, ticket)
-            .map_err(|e| anyhow!("Print: {e:?}"))?;
-        Ok(())
+            .map_err(|e| anyhow!("Print: {e:?}"))
+    })();
+    let _ = std::fs::remove_file(&temp_path);
+    result
+}
+
+fn paper_media(paper: &str) -> Option<winprint::ticket::PredefinedMediaName> {
+    use winprint::ticket::PredefinedMediaName;
+    match paper.trim() {
+        "A4" => Some(PredefinedMediaName::ISOA4),
+        "Letter" => Some(PredefinedMediaName::NorthAmericaLetter),
+        "Legal" => Some(PredefinedMediaName::NorthAmericaLegal),
+        other => PredefinedMediaName::try_from(other).ok(),
     }
 }
 
-fn format_extension_and_label(format: crate::config::ImageFormat) -> (&'static str, &'static str) {
-    match format {
-        crate::config::ImageFormat::Png => ("png", "PNG"),
-        crate::config::ImageFormat::Jpeg => ("jpg", "JPEG"),
-        crate::config::ImageFormat::Bmp => ("bmp", "BMP"),
-        crate::config::ImageFormat::Gif => ("gif", "GIF"),
-    }
+fn write_image(
+    img: &DynamicImage,
+    path: &std::path::Path,
+    format: ImageFormat,
+    jpeg_quality: u8,
+) -> Result<()> {
+    std::fs::write(path, encode_image(img, format, jpeg_quality)?)?;
+    Ok(())
 }
 
-fn encode_image_for_upload(
-    img: &DynamicImage,
-    format: crate::config::ImageFormat,
-    jpeg_quality: u8,
-) -> Result<(Vec<u8>, &'static str, &'static str)> {
-    let (ext, mime) = match format {
-        crate::config::ImageFormat::Png => ("png", "image/png"),
-        crate::config::ImageFormat::Jpeg => ("jpg", "image/jpeg"),
-        crate::config::ImageFormat::Bmp => ("bmp", "image/bmp"),
-        crate::config::ImageFormat::Gif => ("gif", "image/gif"),
-    };
-    let bytes = encode_image_bytes(img, format, jpeg_quality)?;
-    Ok((bytes, ext, mime))
-}
-
-fn encode_image_bytes(
-    img: &DynamicImage,
-    format: crate::config::ImageFormat,
-    jpeg_quality: u8,
-) -> Result<Vec<u8>> {
+fn encode_image(img: &DynamicImage, format: ImageFormat, jpeg_quality: u8) -> Result<Vec<u8>> {
     match format {
-        crate::config::ImageFormat::Jpeg => {
+        ImageFormat::Jpeg => {
             let mut buf = Vec::new();
-            let mut encoder = JpegEncoder::new_with_quality(&mut buf, jpeg_quality.clamp(1, 100));
-            encoder.encode_image(img)?;
+            JpegEncoder::new_with_quality(&mut buf, jpeg_quality.clamp(1, 100))
+                .encode_image(img)?;
             Ok(buf)
         }
-        crate::config::ImageFormat::Png => encode_with_format(img, image::ImageFormat::Png),
-        crate::config::ImageFormat::Bmp => encode_with_format(img, image::ImageFormat::Bmp),
-        crate::config::ImageFormat::Gif => encode_with_format(img, image::ImageFormat::Gif),
+        ImageFormat::Png => encode_with(img, image::ImageFormat::Png),
+        ImageFormat::Bmp => encode_with(img, image::ImageFormat::Bmp),
+        ImageFormat::Gif => encode_with(img, image::ImageFormat::Gif),
     }
 }
 
-fn encode_with_format(img: &DynamicImage, format: image::ImageFormat) -> Result<Vec<u8>> {
+fn encode_with(img: &DynamicImage, format: image::ImageFormat) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     img.write_to(&mut Cursor::new(&mut buf), format)?;
     Ok(buf)
 }
-
-fn save_image_with_config(
-    img: &DynamicImage,
-    path: &std::path::Path,
-    format: crate::config::ImageFormat,
-    jpeg_quality: u8,
-) -> Result<()> {
-    let bytes = encode_image_bytes(img, format, jpeg_quality)?;
-    fs::write(path, bytes)?;
-    Ok(())
-}
-

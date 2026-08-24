@@ -25,7 +25,7 @@ debug = false
 
 [dependencies]
 arboard = "3.4"
-eframe = { version = "0.27", default-features = false, features = ["glow"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "ico"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "blocking", "native-tls"] }
 rfd = { version = "0.15", default-features = false }
@@ -33,15 +33,15 @@ webbrowser = "1.0"
 anyhow = "1.0"
 ab_glyph = "0.2"
 imageproc = { version = "0.24", default-features = false }
-egui_nerdfonts = "0.1"
 serde_json = "1.0"
 tiny-skia = "0.11"
+resvg = { version = "0.45", default-features = false }
 tray-icon = { version = "0.14", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 tesseract-static = { version = "0.2", default-features = false, optional = true }
 tts = { version = "0.26", default-features = false, optional = true }
 dirs = "5.0"
-windows = { version = "0.56", features = ["Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Threading", "Win32_Security", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.56", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
 tauri-winrt-notification = "0.7"
 winprint = { version = "0.2", default-features = false }
 

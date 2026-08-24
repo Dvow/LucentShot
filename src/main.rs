@@ -1,35 +1,30 @@
 #![cfg(windows)]
 #![windows_subsystem = "windows"]
 
-mod capture;
-mod hotkey;
-mod notification;
 mod actions;
-mod overlay;
-mod render;
-mod ui;
+mod capture;
 mod config;
+mod draw;
+mod hotkey;
+mod icons;
+mod notification;
+mod ocr;
+mod overlay;
+mod settings;
 
 use eframe::egui;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tray_icon::{
-    menu::{Menu, MenuItem, MenuId},
-    TrayIconBuilder, Icon,
-};
+use tray_icon::menu::{Menu, MenuId, MenuItem};
+use tray_icon::{Icon, TrayIconBuilder};
 
 fn load_tray_icon() -> Icon {
-    let png_data = include_bytes!("icon/icon.png");
-    let img = image::load_from_memory(png_data).expect("Failed to load tray icon");
+    let img =
+        image::load_from_memory(include_bytes!("icon/icon.png")).expect("Failed to load tray icon");
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let (w, h, data) = if w > 32 || h > 32 {
-        let scaled = image::imageops::resize(
-            &rgba,
-            32,
-            32,
-            image::imageops::FilterType::Lanczos3,
-        );
+        let scaled = image::imageops::resize(&rgba, 32, 32, image::imageops::FilterType::Lanczos3);
         let (w, h) = scaled.dimensions();
         (w, h, scaled.into_raw())
     } else {
@@ -38,97 +33,61 @@ fn load_tray_icon() -> Icon {
     Icon::from_rgba(data, w, h).expect("Failed to create tray icon")
 }
 
-fn build_tray_menu() -> Menu {
-    let tray_menu = Menu::new();
-    let settings_item = MenuItem::with_id(
-        MenuId::new(overlay::MENU_ID_SETTINGS),
-        "Settings",
-        true,
-        None,
-    );
-    let quit_item = MenuItem::with_id(
-        MenuId::new(overlay::MENU_ID_QUIT),
-        "Exit Lightshot Clone",
-        true,
-        None,
-    );
-    let _ = tray_menu.append(&settings_item);
-    let _ = tray_menu.append(&quit_item);
-    tray_menu
-}
-
-fn keep_alive<T>(value: &T) {
-    std::hint::black_box(value);
-}
-
 fn main() {
     config::init();
-    actions::warm_ocr_engine();
-    let tray_icon = load_tray_icon();
+    ocr::warm_engine();
 
-    let tray = {
-        let tray_menu = build_tray_menu();
-        TrayIconBuilder::new()
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
-            .with_tooltip("Lightshot Clone - Left-click to screenshot")
-            .with_icon(tray_icon)
-            .build()
-            .expect("Tray icon build failed")
-    };
-    keep_alive(&tray);
+    let menu = Menu::new();
+    for (id, label) in [
+        (overlay::MENU_ID_SETTINGS, "Settings"),
+        (overlay::MENU_ID_QUIT, "Exit Lightshot Clone"),
+    ] {
+        let _ = menu.append(&MenuItem::with_id(MenuId::new(id), label, true, None));
+    }
+    let tray = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
+        .with_tooltip("Lightshot Clone - Left-click to screenshot")
+        .with_icon(load_tray_icon())
+        .build()
+        .expect("Tray icon build failed");
 
-    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")).ok();
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
         .with_visible(true)
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
         .with_transparent(true);
-    if let Some(ref icon) = icon_data {
-        viewport = viewport.with_icon(Arc::new(icon.clone()));
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")) {
+        viewport = viewport.with_icon(Arc::new(icon));
     }
-    let options = eframe::NativeOptions {
-        viewport,
-        follow_system_theme: false,
-        default_theme: eframe::Theme::Dark,
-        ..Default::default()
-    };
 
-    if let Err(_) = eframe::run_native(
+    let result = eframe::run_native(
         "Lightshot Clone",
-        options,
+        eframe::NativeOptions {
+            viewport,
+            ..Default::default()
+        },
         Box::new(move |cc| {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "minimal".to_owned(),
-                egui::FontData::from_static(include_bytes!("../assets/fonts/Carlito-Regular.ttf")),
-            );
-            fonts.families.get_mut(&egui::FontFamily::Proportional).map(|v| {
-                v.insert(0, "minimal".to_owned());
-            });
-            fonts.families.get_mut(&egui::FontFamily::Monospace).map(|v| {
-                v.insert(0, "minimal".to_owned());
-            });
-            egui_nerdfonts::add_to_fonts(&mut fonts, egui_nerdfonts::Variant::Regular);
-            cc.egui_ctx.set_fonts(fonts);
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            
+
             let trigger_flag = Arc::new(AtomicBool::new(false));
-            let config_snapshot = config::cfg().clone();
             let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
-            let hotkey_handle = hotkey::start_low_level_hotkey_loop(
+            let hotkey_handle = hotkey::start_listener(
                 cc.egui_ctx.clone(),
                 Arc::clone(&trigger_flag),
-                config::hotkey_config(&config_snapshot),
+                hotkey::HotkeyConfig::from_settings(&config::get()),
                 hotkey_tx,
             );
-            
-            Box::new(overlay::OverlayApp::new_background(
+            Ok(Box::new(overlay::OverlayApp::new(
                 trigger_flag,
                 hotkey_handle,
                 hotkey_rx,
-            ))
+            )))
         }),
-    ) {}
+    );
+    drop(tray);
+    if let Err(err) = result {
+        eprintln!("eframe failed: {err}");
+    }
 }
