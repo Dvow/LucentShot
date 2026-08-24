@@ -101,7 +101,7 @@ fn general(ui: &mut egui::Ui, config: &mut Config) {
                 ui.add(
                     egui::TextEdit::singleline(&mut config.general_config_path)
                         .desired_width(260.0)
-                        .hint_text("Default"),
+                        .hint_text("%LOCALAPPDATA%\\Snapture"),
                 );
                 if ui.button("Browse…").clicked() {
                     let picked =

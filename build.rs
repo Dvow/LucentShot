@@ -1,5 +1,7 @@
 fn main() {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    install_runtime_files(&manifest_dir);
+
     let icon_png = manifest_dir.join("assets").join("icons").join("icon.png");
     let icon_ico = std::env::var("OUT_DIR").unwrap() + "/icon.ico";
     if icon_png.exists() {
@@ -31,7 +33,7 @@ fn main() {
     res.set_manifest(
         r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity name="lightshotv2" version="0.1.0.0" processorArchitecture="*" type="win32"/>
+  <assemblyIdentity name="snapture" version="0.1.0.0" processorArchitecture="*" type="win32"/>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
@@ -55,4 +57,88 @@ fn main() {
         eprintln!("winres: {e}");
         std::process::exit(1);
     }
+}
+
+fn install_runtime_files(manifest_dir: &std::path::Path) {
+    let exe_dir = runtime_dir(manifest_dir);
+    let assets = manifest_dir.join("assets");
+
+    println!("cargo:rerun-if-changed=assets/icons/icon.png");
+    copy_file(
+        &assets.join("icons").join("icon.png"),
+        &exe_dir.join("icon.png"),
+    );
+
+    if std::env::var_os("CARGO_FEATURE_OCR").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=assets/tesseract.dll");
+    println!("cargo:rerun-if-changed=assets/leptonica-1.85.0.dll");
+    println!("cargo:rerun-if-changed=assets/eng.traineddata");
+    copy_file(
+        &assets.join("tesseract.dll"),
+        &exe_dir.join("tesseract.dll"),
+    );
+    copy_file(
+        &assets.join("leptonica-1.85.0.dll"),
+        &exe_dir.join("leptonica-1.85.0.dll"),
+    );
+    let tessdata = exe_dir.join("tessdata");
+    let _ = std::fs::create_dir_all(&tessdata);
+    copy_file(
+        &assets.join("eng.traineddata"),
+        &tessdata.join("eng.traineddata"),
+    );
+}
+
+fn runtime_dir(manifest_dir: &std::path::Path) -> std::path::PathBuf {
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".into());
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let target_dir = std::path::PathBuf::from(target_dir);
+        let host = std::env::var("HOST").unwrap_or_default();
+        let target = std::env::var("TARGET").unwrap_or_default();
+        return if !host.is_empty() && host != target {
+            target_dir.join(target).join(profile)
+        } else {
+            target_dir.join(profile)
+        };
+    }
+
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    for ancestor in out_dir.ancestors() {
+        if ancestor.file_name().and_then(|name| name.to_str()) == Some("build") {
+            if let Some(parent) = ancestor.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
+    let mut dir = manifest_dir.join("target");
+    let host = std::env::var("HOST").unwrap_or_default();
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if !host.is_empty() && host != target {
+        dir.push(target);
+    }
+    dir.push(profile);
+    dir
+}
+
+fn copy_file(src: &std::path::Path, dest: &std::path::Path) {
+    if !src.exists() {
+        panic!("missing runtime file: {}", src.display());
+    }
+    if dest.exists() {
+        if let (Ok(src_meta), Ok(dest_meta)) = (src.metadata(), dest.metadata()) {
+            if src_meta.len() == dest_meta.len()
+                && src_meta.modified().ok() <= dest_meta.modified().ok()
+            {
+                return;
+            }
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::copy(src, dest)
+        .unwrap_or_else(|err| panic!("copy {} -> {}: {err}", src.display(), dest.display()));
 }

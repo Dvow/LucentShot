@@ -39,16 +39,7 @@ const OCR_SCALE: u32 = 3;
 #[cfg(feature = "ocr")]
 const DESKEW_THRESHOLD_DEG: f32 = 0.8;
 #[cfg(feature = "ocr")]
-static ENG_TRAINEDDATA: &[u8] = include_bytes!("../assets/eng.traineddata");
-
-#[cfg(feature = "ocr")]
-static TESSDATA_DIR: LazyLock<std::path::PathBuf> = LazyLock::new(|| {
-    let tess_dir = std::env::temp_dir().join("lightshotv2_tessdata");
-    std::fs::create_dir_all(&tess_dir).expect("Failed to create tessdata dir");
-    std::fs::write(tess_dir.join("eng.traineddata"), ENG_TRAINEDDATA)
-        .expect("Failed to write eng.traineddata");
-    tess_dir
-});
+static TESSDATA_DIR: LazyLock<std::path::PathBuf> = LazyLock::new(crate::paths::tessdata_dir);
 
 #[cfg(feature = "ocr")]
 static ENGINE: LazyLock<Mutex<TessBaseApi>> = LazyLock::new(|| {

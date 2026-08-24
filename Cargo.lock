@@ -2077,33 +2077,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightshotv2"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "arboard",
- "dirs",
- "dlopen",
- "eframe",
- "image",
- "imageproc",
- "reqwest",
- "resvg",
- "rfd",
- "serde",
- "serde_json",
- "tauri-winrt-notification",
- "tiny-skia",
- "tray-icon",
- "tts",
- "webbrowser",
- "windows 0.56.0",
- "winprint",
- "winres",
-]
-
-[[package]]
 name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3753,6 +3726,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "snapture"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "arboard",
+ "dirs",
+ "dlopen",
+ "eframe",
+ "image",
+ "imageproc",
+ "reqwest",
+ "resvg",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tauri-winrt-notification",
+ "tiny-skia",
+ "tray-icon",
+ "tts",
+ "webbrowser",
+ "windows 0.56.0",
+ "winprint",
+ "winres",
 ]
 
 [[package]]

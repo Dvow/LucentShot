@@ -1,15 +1,15 @@
 [package]
-name = "lightshotv2"
+name = "snapture"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
 [package.metadata.winres]
-FileDescription = "Lightshot Clone - Screenshot tool"
-ProductName = "Lightshot Clone"
-CompanyName = "Lightshot Clone"
-OriginalFilename = "lightshotv2.exe"
-LegalCopyright = "Copyright (C) 2025"
+FileDescription = "Snapture - Screenshot tool"
+ProductName = "Snapture"
+CompanyName = "Snapture"
+OriginalFilename = "snapture.exe"
+LegalCopyright = "Copyright (C) 2026"
 
 [features]
 default = ["ocr"]

@@ -129,7 +129,7 @@ impl OverlayApp {
                 ViewportCommand::Fullscreen(false),
                 ViewportCommand::Decorations(false),
                 ViewportCommand::Transparent(true),
-                ViewportCommand::Title("Lightshot Clone".into()),
+                ViewportCommand::Title(crate::paths::APP_NAME.into()),
                 ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop),
                 ViewportCommand::OuterPosition(egui::pos2(vx as f32 / ppp, vy as f32 / ppp)),
                 ViewportCommand::InnerSize(egui::vec2(vw as f32 / ppp, vh as f32 / ppp)),
@@ -264,7 +264,7 @@ fn hide_main_window(ctx: &egui::Context) {
             ViewportCommand::MousePassthrough(true),
             ViewportCommand::Decorations(false),
             ViewportCommand::Transparent(true),
-            ViewportCommand::Title("Lightshot Clone".into()),
+            ViewportCommand::Title(crate::paths::APP_NAME.into()),
             ViewportCommand::Visible(true),
         ],
     );
@@ -338,10 +338,11 @@ fn run_export(
             landscape,
             grayscale,
             paper,
+            fit,
         } => {
-            if let Err(err) =
-                crate::actions::print_image(image, &printer, copies, landscape, grayscale, &paper)
-            {
+            if let Err(err) = crate::actions::print_image(
+                image, &printer, copies, landscape, grayscale, &paper, fit,
+            ) {
                 fail("Print", &err);
             }
         }
@@ -751,7 +752,7 @@ impl OverlayApp {
     }
 
     fn draw_print_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Lightshot - Print")
+        egui::Window::new("Print")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -838,6 +839,7 @@ impl OverlayApp {
                                     landscape: self.print_landscape,
                                     grayscale: self.print_grayscale,
                                     paper: self.print_paper_size.clone(),
+                                    fit: self.print_fit_to_page,
                                 },
                             );
                         }

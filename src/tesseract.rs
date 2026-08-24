@@ -6,9 +6,6 @@ use std::path::Path;
 use std::ptr;
 use std::sync::OnceLock;
 
-const TESSERACT_DLL: &[u8] = include_bytes!("../assets/tesseract.dll");
-const LEPTONICA_DLL: &[u8] = include_bytes!("../assets/leptonica-1.85.0.dll");
-
 struct TessHandle {
     _unused: [u8; 0],
 }
@@ -30,12 +27,8 @@ struct Api {
 fn api() -> &'static Api {
     static API: OnceLock<Api> = OnceLock::new();
     API.get_or_init(|| {
-        let dir = std::env::temp_dir().join("lightshotv2_tesseract");
-        std::fs::create_dir_all(&dir).expect("Failed to create Tesseract temp directory");
-        let leptonica = dir.join("leptonica-1.85.0.dll");
-        let tesseract = dir.join("tesseract.dll");
-        std::fs::write(&leptonica, LEPTONICA_DLL).expect("Failed to write Leptonica DLL");
-        std::fs::write(&tesseract, TESSERACT_DLL).expect("Failed to write Tesseract DLL");
+        let leptonica = crate::paths::leptonica_dll();
+        let tesseract = crate::paths::tesseract_dll();
         load_api(&leptonica, &tesseract).unwrap_or_else(|e| panic!("Failed to load Tesseract: {e}"))
     })
 }

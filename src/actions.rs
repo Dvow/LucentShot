@@ -29,6 +29,7 @@ pub enum Export {
         landscape: bool,
         grayscale: bool,
         paper: String,
+        fit: bool,
     },
     Google,
 }
@@ -119,7 +120,7 @@ pub fn upload_prntsc(img: &DynamicImage) -> Result<String> {
     api_json["result"]["url"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| anyhow!("Lightshot API failed: {api_json:?}"))
+        .ok_or_else(|| anyhow!("Upload API failed: {api_json:?}"))
 }
 
 pub fn google_search(img: &DynamicImage) -> Result<()> {
@@ -183,16 +184,16 @@ pub fn print_image(
     landscape: bool,
     grayscale: bool,
     paper_size: &str,
+    fit: bool,
 ) -> Result<()> {
     use winprint::printer::{FilePrinter, ImagePrinter, PrinterDevice};
     use winprint::ticket::{
-        Copies, FeatureOptionPack, FeatureOptionPackWithPredefined, PageOrientation,
-        PageOutputColor, PredefinedPageOrientation, PredefinedPageOutputColor, PrintCapabilities,
-        PrintTicketBuilder,
+        Copies, FeatureOptionPack, FeatureOptionPackWithPredefined, PageImageableSize,
+        PageOrientation, PageOutputColor, PredefinedPageOrientation, PredefinedPageOutputColor,
+        PrintCapabilities, PrintTicketBuilder,
     };
 
-    let temp_path = std::env::temp_dir().join("lightshot_print.png");
-    img.save(&temp_path)?;
+    let print_path = crate::paths::cache_dir().join("print.png");
     let result = (|| {
         let device = PrinterDevice::all()
             .map_err(|e| anyhow!("List printers: {e:?}"))?
@@ -228,24 +229,80 @@ pub fn print_image(
             let _ = builder.merge(opt);
         }
 
+        let mut page_microns = None;
         if let Some(predef) = paper_media(paper_size) {
-            let media = capabilities
+            if let Some(media) = capabilities
                 .page_media_sizes()
-                .find(|m| m.as_predefined_name() == Some(predef));
-            if let Some(media) = media {
+                .find(|m| m.as_predefined_name() == Some(predef))
+            {
+                let size = media.size();
+                page_microns = Some((size.width_in_micron(), size.height_in_micron()));
+                if let Ok(area) = PageImageableSize::try_fetch(&device, media.clone()) {
+                    page_microns = Some((
+                        area.extent.width_in_micron(),
+                        area.extent.height_in_micron(),
+                    ));
+                }
                 let _ = builder.merge(media);
             }
         }
+
+        let prepared = if fit {
+            let (page_w, page_h) = page_inches(paper_size, landscape, page_microns);
+            fit_image(img, page_w, page_h)
+        } else {
+            img.clone()
+        };
+        prepared.save(&print_path)?;
 
         let ticket = builder
             .build()
             .map_err(|e| anyhow!("Build ticket: {e:?}"))?;
         ImagePrinter::new(device)
-            .print(&temp_path, ticket)
+            .print(&print_path, ticket)
             .map_err(|e| anyhow!("Print: {e:?}"))
     })();
-    let _ = std::fs::remove_file(&temp_path);
+    let _ = std::fs::remove_file(&print_path);
     result
+}
+
+fn page_inches(paper: &str, landscape: bool, microns: Option<(u32, u32)>) -> (f64, f64) {
+    let (mut width, mut height) = match microns {
+        Some((w, h)) if w > 0 && h > 0 => (w as f64 / 25_400.0, h as f64 / 25_400.0),
+        _ => match paper.trim() {
+            "A4" => (210.0 / 25.4, 297.0 / 25.4),
+            "Legal" => (8.5, 14.0),
+            _ => (8.5, 11.0),
+        },
+    };
+    if landscape {
+        std::mem::swap(&mut width, &mut height);
+    }
+    (width, height)
+}
+
+fn fit_image(img: &DynamicImage, page_w_in: f64, page_h_in: f64) -> DynamicImage {
+    let (width, height) = fit_dimensions(img.width(), img.height(), page_w_in, page_h_in);
+    if width == img.width() && height == img.height() {
+        return img.clone();
+    }
+    DynamicImage::ImageRgba8(image::imageops::resize(
+        &img.to_rgba8(),
+        width,
+        height,
+        image::imageops::FilterType::Lanczos3,
+    ))
+}
+
+fn fit_dimensions(img_w: u32, img_h: u32, page_w_in: f64, page_h_in: f64) -> (u32, u32) {
+    const DPI: f64 = 96.0;
+    let max_w = (page_w_in * DPI).max(1.0);
+    let max_h = (page_h_in * DPI).max(1.0);
+    let scale = (max_w / img_w.max(1) as f64).min(max_h / img_h.max(1) as f64);
+    (
+        (img_w as f64 * scale).round().max(1.0) as u32,
+        (img_h as f64 * scale).round().max(1.0) as u32,
+    )
 }
 
 fn paper_media(paper: &str) -> Option<winprint::ticket::PredefinedMediaName> {
@@ -286,4 +343,15 @@ fn encode_with(img: &DynamicImage, format: image::ImageFormat) -> Result<Vec<u8>
     let mut buf = Vec::new();
     img.write_to(&mut Cursor::new(&mut buf), format)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_dimensions;
+
+    #[test]
+    fn fit_letter_scales_wide_image_to_page_width() {
+        let (width, height) = fit_dimensions(1920, 1080, 8.5, 11.0);
+        assert_eq!((width, height), (816, 459));
+    }
 }

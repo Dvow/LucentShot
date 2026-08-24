@@ -10,6 +10,7 @@ mod icons;
 mod notification;
 mod ocr;
 mod overlay;
+mod paths;
 mod settings;
 #[cfg(feature = "ocr")]
 mod tesseract;
@@ -42,14 +43,14 @@ fn main() {
     let menu = Menu::new();
     for (id, label) in [
         (overlay::MENU_ID_SETTINGS, "Settings"),
-        (overlay::MENU_ID_QUIT, "Exit Lightshot Clone"),
+        (overlay::MENU_ID_QUIT, "Exit Snapture"),
     ] {
         let _ = menu.append(&MenuItem::with_id(MenuId::new(id), label, true, None));
     }
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Lightshot Clone - Left-click to screenshot")
+        .with_tooltip("Snapture — Left-click to screenshot")
         .with_icon(load_tray_icon())
         .build()
         .expect("Tray icon build failed");
@@ -60,12 +61,13 @@ fn main() {
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
         .with_transparent(true);
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/icon.png")) {
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/icon.png"))
+    {
         viewport = viewport.with_icon(Arc::new(icon));
     }
 
     let result = eframe::run_native(
-        "Lightshot Clone",
+        crate::paths::APP_NAME,
         eframe::NativeOptions {
             viewport,
             ..Default::default()
