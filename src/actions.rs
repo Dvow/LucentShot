@@ -8,9 +8,11 @@ use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::LazyLock;
 
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .user_agent(BROWSER_UA)
         .build()
         .expect("reqwest client")
 });
@@ -124,10 +126,61 @@ pub fn upload_prntsc(img: &DynamicImage) -> Result<String> {
 }
 
 pub fn google_search(img: &DynamicImage) -> Result<()> {
-    let direct_url = upload_anonymous(img)?;
-    open_url(&format!(
-        "https://lens.google.com/uploadbyurl?url={direct_url}"
-    ))
+    open_url(&bing_visual_search(&upload_public_jpeg(img)?)?)
+}
+
+fn bing_visual_search(image_url: &str) -> Result<String> {
+    let mut search = reqwest::Url::parse("https://www.bing.com/images/search")
+        .map_err(|e| anyhow!("Search URL: {e}"))?;
+    search.query_pairs_mut()
+        .append_pair("view", "detailv2")
+        .append_pair("iss", "sbi")
+        .append_pair("form", "SBIVSP")
+        .append_pair("sbisrc", "UrlPaste")
+        .append_pair("q", &format!("imgurl:{image_url}"));
+    Ok(search.into())
+}
+
+fn upload_public_jpeg(img: &DynamicImage) -> Result<String> {
+    let jpeg = encode_image(img, ImageFormat::Jpeg, 90)?;
+    upload_uguu(&jpeg).or_else(|_| upload_catbox(&jpeg))
+}
+
+fn upload_uguu(jpeg: &[u8]) -> Result<String> {
+    let form = reqwest::blocking::multipart::Form::new().part(
+        "files[]",
+        reqwest::blocking::multipart::Part::bytes(jpeg.to_vec())
+            .file_name("screenshot.jpg")
+            .mime_str("image/jpeg")?,
+    );
+    let body: serde_json::Value = HTTP.post("https://uguu.se/upload").multipart(form).send()?.json()?;
+    body["files"][0]["url"]
+        .as_str()
+        .filter(|url| url.starts_with("http"))
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("uguu upload failed: {body}"))
+}
+
+fn upload_catbox(jpeg: &[u8]) -> Result<String> {
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("reqtype", "fileupload")
+        .part(
+            "fileToUpload",
+            reqwest::blocking::multipart::Part::bytes(jpeg.to_vec())
+                .file_name("screenshot.jpg")
+                .mime_str("image/jpeg")?,
+        );
+    let body = HTTP
+        .post("https://catbox.moe/user/api.php")
+        .multipart(form)
+        .send()?
+        .text()?;
+    let url = body.trim();
+    if url.starts_with("https://") || url.starts_with("http://") {
+        Ok(url.to_string())
+    } else {
+        Err(anyhow!("Host failed: {body}"))
+    }
 }
 
 pub fn apply_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: bool) -> Result<()> {
@@ -230,21 +283,20 @@ pub fn print_image(
         }
 
         let mut page_microns = None;
-        if let Some(predef) = paper_media(paper_size) {
-            if let Some(media) = capabilities
+        if let Some(predef) = paper_media(paper_size)
+            && let Some(media) = capabilities
                 .page_media_sizes()
                 .find(|m| m.as_predefined_name() == Some(predef))
-            {
-                let size = media.size();
-                page_microns = Some((size.width_in_micron(), size.height_in_micron()));
-                if let Ok(area) = PageImageableSize::try_fetch(&device, media.clone()) {
-                    page_microns = Some((
-                        area.extent.width_in_micron(),
-                        area.extent.height_in_micron(),
-                    ));
-                }
-                let _ = builder.merge(media);
+        {
+            let size = media.size();
+            page_microns = Some((size.width_in_micron(), size.height_in_micron()));
+            if let Ok(area) = PageImageableSize::try_fetch(&device, media.clone()) {
+                page_microns = Some((
+                    area.extent.width_in_micron(),
+                    area.extent.height_in_micron(),
+                ));
             }
+            let _ = builder.merge(media);
         }
 
         let prepared = if fit {
@@ -347,11 +399,19 @@ fn encode_with(img: &DynamicImage, format: image::ImageFormat) -> Result<Vec<u8>
 
 #[cfg(test)]
 mod tests {
-    use super::fit_dimensions;
+    use super::{bing_visual_search, fit_dimensions};
 
     #[test]
     fn fit_letter_scales_wide_image_to_page_width() {
         let (width, height) = fit_dimensions(1920, 1080, 8.5, 11.0);
         assert_eq!((width, height), (816, 459));
+    }
+
+    #[test]
+    fn bing_visual_search_embeds_image_url() {
+        let url = bing_visual_search("https://d.uguu.se/eqVPouCh.jpg").unwrap();
+        assert!(url.starts_with("https://www.bing.com/images/search?"));
+        assert!(url.contains("iss=sbi"));
+        assert!(url.contains("eqVPouCh.jpg"));
     }
 }

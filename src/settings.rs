@@ -145,12 +145,10 @@ fn general(ui: &mut egui::Ui, config: &mut Config) {
             if ui
                 .add_sized([browse_w, 20.0], egui::Button::new("Browse…"))
                 .clicked()
-            {
-                if let Some(path) =
+                && let Some(path) =
                     crate::actions::pick_save_path("config.json", "JSON config", "json")
-                {
-                    config.general_config_path = path.to_string_lossy().to_string();
-                }
+            {
+                config.general_config_path = path.to_string_lossy().to_string();
             }
         });
         ui.add_space(4.0);

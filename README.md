@@ -8,7 +8,7 @@ It lives in the tray. Press **Print Screen** or left-click the tray icon, then d
 
 - Full-screen overlay with region select and resize handles
 - Pen, line, arrow, rectangle (outline or filled), marker, and text
-- Copy, save, print, upload, and Google image search
+- Copy, save, print, upload, and image search
 - OCR and text-to-speech (default build)
 - Customizable hotkeys, including instant fullscreen save/upload and copy focused window
 - PNG, JPEG, BMP, and GIF export
@@ -30,7 +30,7 @@ Right-click the tray icon for Settings or Exit.
 | `Ctrl+C` | Copy |
 | `Ctrl+S` | Save |
 | `Ctrl+D` | Upload |
-| `Ctrl+G` | Google image search |
+| `Ctrl+G` | Image search |
 | `Ctrl+P` | Print |
 | `Ctrl+A` | Select the whole screen |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |

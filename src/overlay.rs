@@ -265,10 +265,10 @@ impl OverlayApp {
         self.cropped_preview = Some(texture_from_image(ctx, "print_preview", &processed));
         self.printers = crate::actions::printers();
         let known = self.printers.iter().any(|p| p == &self.selected_printer);
-        if self.selected_printer.is_empty() || !known {
-            if let Some(first) = self.printers.first() {
-                self.selected_printer = first.clone();
-            }
+        if (self.selected_printer.is_empty() || !known)
+            && let Some(first) = self.printers.first()
+        {
+            self.selected_printer = first.clone();
         }
         self.show_print_popup = true;
     }
@@ -595,10 +595,10 @@ impl OverlayApp {
         self.paint_shapes(ui);
         self.paint_text_editor(ctx);
 
-        if let Some(sel) = current_sel {
-            if self.should_show_toolbars(ctx, sel) {
-                self.show_toolbars(ctx, sel);
-            }
+        if let Some(sel) = current_sel
+            && self.should_show_toolbars(ctx, sel)
+        {
+            self.show_toolbars(ctx, sel);
         }
 
         if let Some(pointer) = pointer {
@@ -1025,10 +1025,10 @@ impl OverlayApp {
                     self.persist();
                 }
                 ui.add_space(2.0);
-                if icons::icon_button(ui, Icon::Undo, "Undo (Ctrl+Z)") {
-                    if let Some(shape) = self.shapes.pop() {
-                        self.redo_stack.push(shape);
-                    }
+                if icons::icon_button(ui, Icon::Undo, "Undo (Ctrl+Z)")
+                    && let Some(shape) = self.shapes.pop()
+                {
+                    self.redo_stack.push(shape);
                 }
             });
         });
@@ -1045,7 +1045,7 @@ impl OverlayApp {
                 if icons::icon_button(ui, Icon::Cloud, "Cloud Upload (Ctrl+D)") {
                     self.export(ctx, Export::Upload);
                 }
-                if icons::icon_button(ui, Icon::Google, "Google Image Search (Ctrl+G)") {
+                if icons::icon_button(ui, Icon::Google, "Image Search (Ctrl+G)") {
                     self.export(ctx, Export::Google);
                 }
                 #[cfg(feature = "ocr")]
