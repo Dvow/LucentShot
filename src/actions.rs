@@ -33,7 +33,7 @@ pub enum Export {
         paper: String,
         fit: bool,
     },
-    Google,
+    ImageSearch,
 }
 
 pub fn copy_image(img: &DynamicImage) -> Result<()> {
@@ -125,7 +125,7 @@ pub fn upload_prntsc(img: &DynamicImage) -> Result<String> {
         .ok_or_else(|| anyhow!("Upload API failed: {api_json:?}"))
 }
 
-pub fn google_search(img: &DynamicImage) -> Result<()> {
+pub fn image_search(img: &DynamicImage) -> Result<()> {
     open_url(&bing_visual_search(&upload_public_jpeg(img)?)?)
 }
 
@@ -143,7 +143,9 @@ fn bing_visual_search(image_url: &str) -> Result<String> {
 
 fn upload_public_jpeg(img: &DynamicImage) -> Result<String> {
     let jpeg = encode_image(img, ImageFormat::Jpeg, 90)?;
-    upload_uguu(&jpeg).or_else(|_| upload_catbox(&jpeg))
+    upload_uguu(&jpeg).or_else(|_| {
+        upload_catbox(jpeg, "screenshot.jpg".to_string(), "image/jpeg")
+    })
 }
 
 fn upload_uguu(jpeg: &[u8]) -> Result<String> {
@@ -161,14 +163,14 @@ fn upload_uguu(jpeg: &[u8]) -> Result<String> {
         .ok_or_else(|| anyhow!("uguu upload failed: {body}"))
 }
 
-fn upload_catbox(jpeg: &[u8]) -> Result<String> {
+fn upload_catbox(bytes: Vec<u8>, filename: String, mime: &str) -> Result<String> {
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
         .part(
             "fileToUpload",
-            reqwest::blocking::multipart::Part::bytes(jpeg.to_vec())
-                .file_name("screenshot.jpg")
-                .mime_str("image/jpeg")?,
+            reqwest::blocking::multipart::Part::bytes(bytes)
+                .file_name(filename)
+                .mime_str(mime)?,
         );
     let body = HTTP
         .post("https://catbox.moe/user/api.php")
@@ -195,27 +197,11 @@ pub fn apply_upload_result(url: &str, auto_copy_link: bool, auto_close_upload: b
 
 fn upload_anonymous(img: &DynamicImage) -> Result<String> {
     let config = crate::config::get();
-    let bytes = encode_image(img, config.format, config.jpeg_quality)?;
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("reqtype", "fileupload")
-        .part(
-            "fileToUpload",
-            reqwest::blocking::multipart::Part::bytes(bytes)
-                .file_name(format!("screenshot.{}", config.format.extension()))
-                .mime_str(config.format.mime())?,
-        );
-
-    let resp = HTTP
-        .post("https://catbox.moe/user/api.php")
-        .multipart(form)
-        .send()?;
-    if !resp.status().is_success() {
-        let err_body = resp
-            .text()
-            .unwrap_or_else(|e| format!("Failed to read error body: {e}"));
-        return Err(anyhow!("Host failed: {err_body}"));
-    }
-    Ok(resp.text()?)
+    upload_catbox(
+        encode_image(img, config.format, config.jpeg_quality)?,
+        format!("screenshot.{}", config.format.extension()),
+        config.format.mime(),
+    )
 }
 
 pub fn printers() -> Vec<String> {

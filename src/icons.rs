@@ -12,7 +12,7 @@ pub enum Icon {
     Text,
     Undo,
     Cloud,
-    Google,
+    Search,
     #[cfg(feature = "ocr")]
     Ocr,
     #[cfg(feature = "ocr")]
@@ -105,7 +105,7 @@ impl Icon {
             Self::Text => include_str!("../assets/icons/type.svg"),
             Self::Undo => include_str!("../assets/icons/undo-2.svg"),
             Self::Cloud => include_str!("../assets/icons/cloud-upload.svg"),
-            Self::Google => include_str!("../assets/icons/search.svg"),
+            Self::Search => include_str!("../assets/icons/search.svg"),
             #[cfg(feature = "ocr")]
             Self::Ocr => include_str!("../assets/icons/align-left.svg"),
             #[cfg(feature = "ocr")]

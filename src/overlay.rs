@@ -22,7 +22,6 @@ pub struct OverlayApp {
     start_pos: Option<Pos2>,
     current_tool: Tool,
     current_color: Color32,
-    last_saved_color: Color32,
     shapes: Vec<Shape>,
     redo_stack: Vec<Shape>,
     active_shape: Option<Shape>,
@@ -43,6 +42,7 @@ pub struct OverlayApp {
     print_fit_to_page: bool,
     show_settings: bool,
     ignore_close: bool,
+    hide_after_paint: bool,
     settings_state: SettingsState,
     config: Config,
     hotkey_handle: HotkeyHandle,
@@ -67,7 +67,6 @@ impl OverlayApp {
             start_pos: None,
             current_tool: Tool::Pen,
             current_color: color,
-            last_saved_color: color,
             shapes: Vec::new(),
             redo_stack: Vec::new(),
             active_shape: None,
@@ -88,6 +87,7 @@ impl OverlayApp {
             print_fit_to_page: config.print_fit,
             show_settings: false,
             ignore_close: false,
+            hide_after_paint: false,
             settings_state: SettingsState::default(),
             config,
             hotkey_handle,
@@ -110,16 +110,13 @@ impl OverlayApp {
         let image = crate::capture::to_dynamic_image(raw);
         self.texture = Some(texture_from_image(ctx, "screenshot", &image));
         self.screenshot = Some(Arc::new(image));
+        self.hide_after_paint = false;
+        self.reset_draw_state();
         if !self.config.general_keep_selected_area {
             self.selection = None;
         }
-        self.reset_gesture();
-        self.shapes.clear();
-        self.redo_stack.clear();
-        self.editing_text_index = None;
         self.current_tool = Tool::Pen;
         self.show_settings = false;
-        self.show_print_popup = false;
         self.is_active = true;
         egui::Popup::close_all(ctx);
 
@@ -148,12 +145,36 @@ impl OverlayApp {
         self.hotkey_handle.set_listening(true);
     }
 
+    fn reset_draw_state(&mut self) {
+        self.reset_gesture();
+        self.shapes.clear();
+        self.redo_stack.clear();
+        self.active_shape = None;
+        self.editing_text_index = None;
+        self.show_print_popup = false;
+    }
+
     fn deactivate(&mut self, ctx: &egui::Context) {
+        let needs_clean_frame = self.is_active
+            && self.texture.is_some()
+            && self.selection.is_some()
+            && !self.config.general_keep_selected_area;
+        self.reset_draw_state();
+        if !self.config.general_keep_selected_area {
+            self.selection = None;
+        }
+        if needs_clean_frame {
+            self.hide_after_paint = true;
+            ctx.request_repaint();
+            return;
+        }
+        self.hide_overlay(ctx);
+    }
+
+    fn hide_overlay(&mut self, ctx: &egui::Context) {
+        self.hide_after_paint = false;
         self.is_active = false;
         self.hotkey_handle.set_listening(false);
-        self.show_print_popup = false;
-        self.reset_gesture();
-        self.editing_text_index = None;
         self.texture = None;
         self.screenshot = None;
         self.cropped_preview = None;
@@ -418,8 +439,8 @@ fn run_export(
                 crate::ocr::show_error(&format!("Image to Speech failed: {err}"));
             }
         }
-        Export::Google => {
-            if let Err(err) = crate::actions::google_search(image) {
+        Export::ImageSearch => {
+            if let Err(err) = crate::actions::image_search(image) {
                 fail("Search", &err);
             }
         }
@@ -468,12 +489,6 @@ impl eframe::App for OverlayApp {
             return;
         }
 
-        if self.current_color != self.last_saved_color {
-            self.config.set_drawing_color(self.current_color);
-            self.persist();
-            self.last_saved_color = self.current_color;
-        }
-
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.cancel_or_close(ctx);
             return;
@@ -489,6 +504,9 @@ impl eframe::App for OverlayApp {
 
         if self.is_active {
             self.paint_overlay(ctx, ui);
+            if self.hide_after_paint {
+                self.hide_overlay(ctx);
+            }
         }
         if self.show_settings {
             self.draw_settings(ui);
@@ -554,7 +572,7 @@ impl OverlayApp {
                 Shortcut::Copy => self.export(ctx, Export::Copy),
                 Shortcut::Save => self.export(ctx, Export::Save),
                 Shortcut::Upload => self.export(ctx, Export::Upload),
-                Shortcut::Google => self.export(ctx, Export::Google),
+                Shortcut::ImageSearch => self.export(ctx, Export::ImageSearch),
                 Shortcut::Print => {
                     self.prepare_print(ctx, sel);
                     return true;
@@ -622,6 +640,9 @@ impl OverlayApp {
         let Some(sel) = current_sel else {
             ui.painter()
                 .rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180));
+            if self.hide_after_paint {
+                return;
+            }
             let Some(pointer) = pointer else {
                 return;
             };
@@ -1045,8 +1066,8 @@ impl OverlayApp {
                 if icons::icon_button(ui, Icon::Cloud, "Cloud Upload (Ctrl+D)") {
                     self.export(ctx, Export::Upload);
                 }
-                if icons::icon_button(ui, Icon::Google, "Image Search (Ctrl+G)") {
-                    self.export(ctx, Export::Google);
+                if icons::icon_button(ui, Icon::Search, "Image Search (Ctrl+G)") {
+                    self.export(ctx, Export::ImageSearch);
                 }
                 #[cfg(feature = "ocr")]
                 if icons::icon_button(ui, Icon::Ocr, "Image to Text (OCR)") {
@@ -1172,7 +1193,7 @@ enum Shortcut {
     Undo,
     Redo,
     Upload,
-    Google,
+    ImageSearch,
     Print,
     SelectAll,
 }
@@ -1199,7 +1220,7 @@ fn shortcut_from_event(event: &egui::Event) -> Option<Shortcut> {
         (Key::Z, false) => Some(Shortcut::Undo),
         (Key::Z, true) => Some(Shortcut::Redo),
         (Key::D, _) => Some(Shortcut::Upload),
-        (Key::G, _) => Some(Shortcut::Google),
+        (Key::G, _) => Some(Shortcut::ImageSearch),
         (Key::P, _) => Some(Shortcut::Print),
         (Key::A, _) => Some(Shortcut::SelectAll),
         _ => None,
