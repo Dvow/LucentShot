@@ -5,7 +5,7 @@ pub fn show(title: &str, body: &str) {
     static ICON_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
     let path = ICON_PATH.get_or_init(|| {
         let path = crate::paths::data_dir().join("icon.png");
-        let _ = std::fs::write(&path, include_bytes!("../assets/icons/icon.png"));
+        let _ = crate::app_icon().save(&path);
         path
     });
 

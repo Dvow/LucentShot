@@ -4,10 +4,6 @@ A fast Windows screenshot tool. Capture a region, mark it up, then copy, save, p
 
 Lives in the tray. Press **Print Screen** (or left-click the tray icon) and drag.
 
-<p align="center">
-  <img src="assets/icons/icon.png" width="96" alt="LucentShot icon">
-</p>
-
 ## Features
 
 - Full-screen overlay with region select and resize handles

@@ -17,14 +17,10 @@ fn main() {
         );
     }
 
+    let ico = root.join("assets").join("icons").join("icon.ico");
+    println!("cargo:rerun-if-changed={}", ico.display());
     let mut res = winres::WindowsResource::new();
-    res.set_icon(
-        root.join("assets")
-            .join("icons")
-            .join("icon.ico")
-            .to_str()
-            .unwrap(),
-    );
+    res.set_icon(ico.to_str().unwrap());
     res.set_manifest(
         r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">

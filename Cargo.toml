@@ -27,7 +27,7 @@ debug = false
 [dependencies]
 arboard = "3.4"
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "ico"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "blocking", "native-tls"] }
 rfd = { version = "0.15", default-features = false }
 webbrowser = "1.0"

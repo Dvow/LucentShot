@@ -21,10 +21,14 @@ use std::sync::Arc;
 use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
+pub(crate) fn app_icon() -> image::RgbaImage {
+    image::load_from_memory(include_bytes!("../assets/icons/icon.ico"))
+        .expect("icon.ico")
+        .to_rgba8()
+}
+
 fn load_tray_icon() -> Icon {
-    let img = image::load_from_memory(include_bytes!("../assets/icons/icon.png"))
-        .expect("Failed to load tray icon");
-    let rgba = img.to_rgba8();
+    let rgba = app_icon();
     let (w, h) = rgba.dimensions();
     let (w, h, data) = if w > 32 || h > 32 {
         let scaled = image::imageops::resize(&rgba, 32, 32, image::imageops::FilterType::Lanczos3);
@@ -61,10 +65,13 @@ fn main() {
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
         .with_transparent(true);
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/icon.png"))
-    {
-        viewport = viewport.with_icon(Arc::new(icon));
-    }
+    let icon = app_icon();
+    let (width, height) = icon.dimensions();
+    viewport = viewport.with_icon(Arc::new(egui::IconData {
+        rgba: icon.into_raw(),
+        width,
+        height,
+    }));
 
     let result = eframe::run_native(
         crate::paths::APP_NAME,
