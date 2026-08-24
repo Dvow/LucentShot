@@ -19,3 +19,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Third-party
+-----------
+
+Lucide (https://lucide.dev) — toolbar and app icons in assets/icons/ (ISC)
+
+Tesseract (https://github.com/tesseract-ocr/tesseract) — tesseract.dll and
+tessdata/eng.traineddata (Apache License 2.0)
+
+Leptonica (https://github.com/DanBloomberg/leptonica) — leptonica-1.85.0.dll
+(BSD 2-Clause)

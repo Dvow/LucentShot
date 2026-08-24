@@ -44,7 +44,7 @@ if ($Build) {
 New-Item -ItemType Directory -Force -Path $Root, "$Root\tessdata", $Menu | Out-Null
 Copy-Item (Find-File $Exe) (Join-Path $Root $Exe) -Force
 Copy-Item $PSCommandPath $Root -Force
-foreach ($name in 'tesseract.dll', 'leptonica-1.85.0.dll', 'LICENSE', 'THIRD_PARTY.md') {
+    foreach ($name in 'tesseract.dll', 'leptonica-1.85.0.dll', 'LICENSE') {
     Copy-Item (Find-File $name) (Join-Path $Root $name) -Force
 }
 Copy-Item (Find-File 'eng.traineddata') "$Root\tessdata\eng.traineddata" -Force
