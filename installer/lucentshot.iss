@@ -11,6 +11,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
+LicenseFile=LICENSE
 DisableProgramGroupPage=yes
 OutputDir=dist
 OutputBaseFilename=LucentShot-{#MyAppVersion}-setup
@@ -38,6 +39,8 @@ Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\tesseract.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\leptonica-1.85.0.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\eng.traineddata"; DestDir: "{app}\tessdata"; Flags: ignoreversion
+Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD_PARTY.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

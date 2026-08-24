@@ -1,6 +1,6 @@
 [package]
 name = "lucentshot"
-version = "0.1.0"
+version = "1.0.3"
 edition = "2021"
 description = "A fast Windows screenshot tool"
 build = "build.rs"
@@ -8,7 +8,7 @@ build = "build.rs"
 [package.metadata.winres]
 FileDescription = "LucentShot - Screenshot tool"
 ProductName = "LucentShot"
-CompanyName = "LucentShot"
+CompanyName = "Dvow"
 OriginalFilename = "lucentshot.exe"
 LegalCopyright = "Copyright (C) 2026"
 

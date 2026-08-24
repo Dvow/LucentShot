@@ -27,9 +27,9 @@ jobs:
             Select-Object -First 1).Matches[0].Groups[1].Value
           "version=$ver" >> $env:GITHUB_OUTPUT
           New-Item -ItemType Directory -Force dist, dist/tessdata | Out-Null
-          Copy-Item target/release/lucentshot.exe, assets/tesseract.dll, assets/leptonica-1.85.0.dll, installer/Install-LucentShot.ps1 dist/
+          Copy-Item target/release/lucentshot.exe, assets/tesseract.dll, assets/leptonica-1.85.0.dll, installer/Install-LucentShot.ps1, LICENSE, THIRD_PARTY.md dist/
           Copy-Item assets/eng.traineddata dist/tessdata/
-          Compress-Archive -Path dist/lucentshot.exe, dist/tesseract.dll, dist/leptonica-1.85.0.dll, dist/Install-LucentShot.ps1, dist/tessdata -DestinationPath "dist/LucentShot-$ver-portable.zip"
+          Compress-Archive -Path dist/lucentshot.exe, dist/tesseract.dll, dist/leptonica-1.85.0.dll, dist/Install-LucentShot.ps1, dist/LICENSE, dist/THIRD_PARTY.md, dist/tessdata -DestinationPath "dist/LucentShot-$ver-portable.zip"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=$ver installer\lucentshot.iss
 
       - uses: actions/upload-artifact@v6

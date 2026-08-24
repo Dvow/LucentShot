@@ -76,4 +76,4 @@ Config is stored at `%LOCALAPPDATA%\LucentShot\config.json`. You can point it at
 
 ## License
 
-The app icon and toolbar icons in `assets/icons/` include [Lucide](https://lucide.dev) artwork (ISC). Tesseract and Leptonica binaries are covered by their own licenses.
+LucentShot is [MIT](LICENSE). Icon and toolbar artwork includes [Lucide](https://lucide.dev) (ISC). Tesseract and Leptonica binaries are under their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
