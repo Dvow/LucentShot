@@ -112,10 +112,6 @@ fn general(ui: &mut egui::Ui, config: &mut Config) {
             &mut config.general_capture_cursor,
             "Include cursor in screenshots",
         );
-        ui.checkbox(
-            &mut config.general_keep_selected_area,
-            "Remember last selection",
-        );
     });
 
     section(ui, "Sharing", |ui| {

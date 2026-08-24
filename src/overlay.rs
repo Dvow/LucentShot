@@ -13,6 +13,13 @@ use std::thread;
 pub const MENU_ID_QUIT: &str = "menu_quit";
 pub const MENU_ID_SETTINGS: &str = "menu_settings";
 
+#[derive(Clone, Copy, PartialEq)]
+enum ClosePhase {
+    Idle,
+    PaintClean,
+    HideNext,
+}
+
 pub struct OverlayApp {
     screenshot: Option<Arc<DynamicImage>>,
     texture: Option<egui::TextureHandle>,
@@ -42,7 +49,7 @@ pub struct OverlayApp {
     print_fit_to_page: bool,
     show_settings: bool,
     ignore_close: bool,
-    hide_after_paint: bool,
+    close_phase: ClosePhase,
     settings_state: SettingsState,
     config: Config,
     hotkey_handle: HotkeyHandle,
@@ -87,7 +94,7 @@ impl OverlayApp {
             print_fit_to_page: config.print_fit,
             show_settings: false,
             ignore_close: false,
-            hide_after_paint: false,
+            close_phase: ClosePhase::Idle,
             settings_state: SettingsState::default(),
             config,
             hotkey_handle,
@@ -110,11 +117,8 @@ impl OverlayApp {
         let image = crate::capture::to_dynamic_image(raw);
         self.texture = Some(texture_from_image(ctx, "screenshot", &image));
         self.screenshot = Some(Arc::new(image));
-        self.hide_after_paint = false;
+        self.close_phase = ClosePhase::Idle;
         self.reset_draw_state();
-        if !self.config.general_keep_selected_area {
-            self.selection = None;
-        }
         self.current_tool = Tool::Pen;
         self.show_settings = false;
         self.is_active = true;
@@ -147,6 +151,7 @@ impl OverlayApp {
 
     fn reset_draw_state(&mut self) {
         self.reset_gesture();
+        self.selection = None;
         self.shapes.clear();
         self.redo_stack.clear();
         self.active_shape = None;
@@ -155,16 +160,10 @@ impl OverlayApp {
     }
 
     fn deactivate(&mut self, ctx: &egui::Context) {
-        let needs_clean_frame = self.is_active
-            && self.texture.is_some()
-            && self.selection.is_some()
-            && !self.config.general_keep_selected_area;
+        let needs_clean_frame = self.is_active && self.texture.is_some() && self.selection.is_some();
         self.reset_draw_state();
-        if !self.config.general_keep_selected_area {
-            self.selection = None;
-        }
         if needs_clean_frame {
-            self.hide_after_paint = true;
+            self.close_phase = ClosePhase::PaintClean;
             ctx.request_repaint();
             return;
         }
@@ -172,13 +171,17 @@ impl OverlayApp {
     }
 
     fn hide_overlay(&mut self, ctx: &egui::Context) {
-        self.hide_after_paint = false;
+        self.close_phase = ClosePhase::Idle;
         self.is_active = false;
         self.hotkey_handle.set_listening(false);
+        self.reset_draw_state();
         self.texture = None;
         self.screenshot = None;
         self.cropped_preview = None;
         hide_main_window(ctx);
+        if self.trigger_flag.swap(false, Ordering::SeqCst) {
+            self.activate(ctx);
+        }
     }
 
     fn open_settings(&mut self, ctx: &egui::Context) {
@@ -494,6 +497,11 @@ impl eframe::App for OverlayApp {
         }
         self.ignore_close = false;
 
+        if self.close_phase == ClosePhase::HideNext {
+            self.hide_overlay(ctx);
+            return;
+        }
+
         if !self.is_active && !self.show_settings {
             hide_main_window(ctx);
             return;
@@ -508,14 +516,18 @@ impl eframe::App for OverlayApp {
             self.reset_gesture();
         }
 
-        if self.is_active && self.handle_shortcuts(ctx) {
+        if self.is_active && self.close_phase == ClosePhase::Idle && self.handle_shortcuts(ctx) {
             return;
         }
 
         if self.is_active {
-            self.paint_overlay(ctx, ui);
-            if self.hide_after_paint {
-                self.hide_overlay(ctx);
+            let closing = self.close_phase == ClosePhase::PaintClean;
+            self.paint_overlay(ctx, ui, closing);
+            if closing {
+                self.close_phase = ClosePhase::HideNext;
+                ctx.request_repaint();
+            } else if self.close_phase == ClosePhase::PaintClean {
+                ctx.request_repaint();
             }
         }
         if self.show_settings {
@@ -598,7 +610,7 @@ impl OverlayApp {
         self.selection.map(|s| Rect::from_two_pos(s.min, s.max))
     }
 
-    fn paint_overlay(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn paint_overlay(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, closing: bool) {
         let screen_rect = overlay_screen_rect(ctx);
         ui.set_clip_rect(screen_rect);
         if let Some(texture) = &self.texture {
@@ -620,8 +632,11 @@ impl OverlayApp {
 
         let pointer = latest_pointer_pos(ctx, screen_rect);
         let current_sel = self.normalized_selection();
-        self.paint_selection_chrome(ui, screen_rect, current_sel, pointer);
+        self.paint_selection_chrome(ui, screen_rect, current_sel, pointer, closing);
         self.paint_shapes(ui);
+        if closing {
+            return;
+        }
         self.paint_text_editor(ctx);
 
         if let Some(sel) = current_sel
@@ -647,11 +662,12 @@ impl OverlayApp {
         screen_rect: Rect,
         current_sel: Option<Rect>,
         pointer: Option<Pos2>,
+        closing: bool,
     ) {
         let Some(sel) = current_sel else {
             ui.painter()
                 .rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180));
-            if self.hide_after_paint {
+            if closing {
                 return;
             }
             let Some(pointer) = pointer else {

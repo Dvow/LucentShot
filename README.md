@@ -12,7 +12,7 @@ It lives in the tray. Press **Print Screen** or left-click the tray icon, then d
 - OCR and text-to-speech (default build)
 - Customizable hotkeys, including instant fullscreen save/upload and copy focused window
 - PNG, JPEG, BMP, and GIF export
-- Start with Windows, action notifications, cursor capture, and a remembered selection
+- Start with Windows, action notifications, and cursor capture
 
 ## Usage
 
