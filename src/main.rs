@@ -12,6 +12,7 @@ mod ocr;
 mod overlay;
 mod paths;
 mod settings;
+mod startup;
 #[cfg(feature = "ocr")]
 mod tesseract;
 
@@ -43,6 +44,7 @@ fn load_tray_icon() -> Icon {
 
 fn main() {
     config::init();
+    startup::apply(config::get().general_start_with_windows);
     notification::init();
     ocr::warm_engine();
 

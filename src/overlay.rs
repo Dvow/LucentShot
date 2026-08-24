@@ -42,6 +42,7 @@ pub struct OverlayApp {
     print_paper_size: String,
     print_fit_to_page: bool,
     show_settings: bool,
+    ignore_close: bool,
     settings_state: SettingsState,
     config: Config,
     hotkey_handle: HotkeyHandle,
@@ -86,6 +87,7 @@ impl OverlayApp {
             print_paper_size: config.print_paper.clone(),
             print_fit_to_page: config.print_fit,
             show_settings: false,
+            ignore_close: false,
             settings_state: SettingsState::default(),
             config,
             hotkey_handle,
@@ -127,6 +129,9 @@ impl OverlayApp {
             ctx,
             [
                 ViewportCommand::Fullscreen(false),
+                ViewportCommand::Minimized(false),
+                ViewportCommand::Resizable(false),
+                ViewportCommand::MinInnerSize(egui::vec2(1.0, 1.0)),
                 ViewportCommand::Decorations(false),
                 ViewportCommand::Transparent(true),
                 ViewportCommand::Title(crate::paths::APP_NAME.into()),
@@ -138,6 +143,8 @@ impl OverlayApp {
                 ViewportCommand::MousePassthrough(false),
             ],
         );
+        force_present_window(vx, vy, vw, vh);
+        ctx.request_repaint();
         self.hotkey_handle.set_listening(true);
     }
 
@@ -155,22 +162,42 @@ impl OverlayApp {
 
     fn open_settings(&mut self, ctx: &egui::Context) {
         self.show_settings = true;
+        self.ignore_close = true;
         self.hotkey_handle.set_listening(true);
+        let size = egui::vec2(
+            crate::settings::WINDOW_SIZE[0],
+            crate::settings::WINDOW_SIZE[1],
+        );
+        let origin = settings_origin(ctx, size);
         send_cmds(
             ctx,
             [
                 ViewportCommand::Fullscreen(false),
+                ViewportCommand::Minimized(false),
                 ViewportCommand::WindowLevel(egui::WindowLevel::Normal),
-                ViewportCommand::InnerSize(egui::vec2(520.0, 360.0)),
-                ViewportCommand::OuterPosition(egui::pos2(120.0, 120.0)),
+                ViewportCommand::MinInnerSize(egui::vec2(
+                    crate::settings::WINDOW_MIN[0],
+                    crate::settings::WINDOW_MIN[1],
+                )),
+                ViewportCommand::InnerSize(size),
+                ViewportCommand::OuterPosition(origin),
                 ViewportCommand::Decorations(true),
                 ViewportCommand::Transparent(false),
+                ViewportCommand::Resizable(true),
                 ViewportCommand::Title("Settings".into()),
                 ViewportCommand::Visible(true),
                 ViewportCommand::MousePassthrough(false),
                 ViewportCommand::Focus,
             ],
         );
+        let ppp = ctx.pixels_per_point().max(0.1);
+        force_present_window(
+            (origin.x * ppp).round() as i32,
+            (origin.y * ppp).round() as i32,
+            (size.x * ppp).round() as i32,
+            (size.y * ppp).round() as i32,
+        );
+        ctx.request_repaint();
     }
 
     fn close_settings(&mut self, ctx: &egui::Context) {
@@ -258,16 +285,80 @@ fn hide_main_window(ctx: &egui::Context) {
         ctx,
         [
             ViewportCommand::Fullscreen(false),
-            ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)),
-            ViewportCommand::OuterPosition(egui::pos2(-10000.0, -10000.0)),
+            ViewportCommand::Minimized(false),
+            ViewportCommand::Resizable(false),
             ViewportCommand::WindowLevel(egui::WindowLevel::Normal),
             ViewportCommand::MousePassthrough(true),
             ViewportCommand::Decorations(false),
             ViewportCommand::Transparent(true),
             ViewportCommand::Title(crate::paths::APP_NAME.into()),
-            ViewportCommand::Visible(true),
+            ViewportCommand::Visible(false),
         ],
     );
+}
+
+fn force_present_window(x: i32, y: i32, w: i32, h: i32) {
+    let Some(hwnd) = find_app_hwnd() else {
+        return;
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_SHOWWINDOW, SW_RESTORE,
+    };
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = SetWindowPos(hwnd, HWND_TOP, x, y, w.max(1), h.max(1), SWP_SHOWWINDOW);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+fn find_app_hwnd() -> Option<windows::Win32::Foundation::HWND> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId,
+    };
+
+    struct Find {
+        pid: u32,
+        hwnd: HWND,
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let find = unsafe { &mut *(lparam.0 as *mut Find) };
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid != find.pid {
+            return BOOL(1);
+        }
+        let mut buf = [0u16; 128];
+        let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
+        if n <= 0 {
+            return BOOL(1);
+        }
+        let title = String::from_utf16_lossy(&buf[..n as usize]);
+        if title == crate::paths::APP_NAME || title == "Settings" {
+            find.hwnd = hwnd;
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+
+    let mut find = Find {
+        pid: unsafe { GetCurrentProcessId() },
+        hwnd: windows::Win32::Foundation::HWND::default(),
+    };
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut find as *mut Find as isize)) };
+    (find.hwnd.0 != 0).then_some(find.hwnd)
+}
+
+fn settings_origin(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
+    let ppp = ctx.pixels_per_point().max(0.1);
+    let (sw, sh) = crate::capture::primary_screen_size();
+    let avail = egui::vec2(sw as f32 / ppp, sh as f32 / ppp);
+    egui::pos2(
+        ((avail.x - size.x) * 0.5).max(40.0),
+        ((avail.y - size.y) * 0.5).max(40.0),
+    )
 }
 
 fn texture_from_image(
@@ -350,23 +441,30 @@ fn run_export(
 }
 
 impl eframe::App for OverlayApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        let ctx = &ctx;
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_external_events(ctx);
-
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.cancel_or_close(ctx);
-            return;
-        }
-
         if self.trigger_flag.swap(false, Ordering::SeqCst) && !self.is_active {
             self.activate(ctx);
         }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            if self.ignore_close {
+                self.ignore_close = false;
+                return;
+            }
+            self.cancel_or_close(ctx);
+            return;
+        }
+        self.ignore_close = false;
 
         if !self.is_active && !self.show_settings {
-            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            hide_main_window(ctx);
             return;
         }
 

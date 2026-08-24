@@ -7,13 +7,19 @@ use windows::Win32::Graphics::Gdi::{
     SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 pub struct RawCapture {
     pub width: i32,
     pub height: i32,
     pub pixels: Vec<u8>,
+}
+
+pub fn primary_screen_size() -> (i32, i32) {
+    // SAFETY: GetSystemMetrics is always safe for these documented screen indexes.
+    unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
 }
 
 pub fn virtual_screen_bounds() -> (i32, i32, i32, i32) {

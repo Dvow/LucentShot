@@ -13,6 +13,7 @@ pub struct Config {
     pub general_auto_close_upload: bool,
     pub general_keep_selected_area: bool,
     pub general_capture_cursor: bool,
+    pub general_start_with_windows: bool,
     pub general_config_path: String,
     pub hotkey_general_enabled: bool,
     pub hotkey_general_key: Option<u32>,
@@ -52,6 +53,7 @@ impl Default for Config {
             general_auto_close_upload: false,
             general_keep_selected_area: false,
             general_capture_cursor: false,
+            general_start_with_windows: false,
             general_config_path: String::new(),
             hotkey_general_enabled: true,
             hotkey_general_key: Some(0x2C),
@@ -164,6 +166,7 @@ pub fn save() {
 
 pub fn persist(config: &Config) {
     *get_mut() = config.clone();
+    crate::startup::apply(config.general_start_with_windows);
     save();
 }
 
