@@ -4,13 +4,9 @@ pub fn show(title: &str, body: &str) {
 
     static ICON_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
     let path = ICON_PATH.get_or_init(|| {
-        let next_to_exe = crate::paths::icon_file();
-        if next_to_exe.exists() {
-            return next_to_exe;
-        }
-        let fallback = crate::paths::data_dir().join("icon.png");
-        let _ = std::fs::write(&fallback, include_bytes!("../assets/icons/icon.png"));
-        fallback
+        let path = crate::paths::data_dir().join("icon.png");
+        let _ = std::fs::write(&path, include_bytes!("../assets/icons/icon.png"));
+        path
     });
 
     let mut toast = Toast::new(Toast::POWERSHELL_APP_ID)

@@ -2,6 +2,7 @@
 name = "lucentshot"
 version = "0.1.0"
 edition = "2021"
+description = "A fast Windows screenshot tool"
 build = "build.rs"
 
 [package.metadata.winres]
@@ -26,7 +27,7 @@ debug = false
 [dependencies]
 arboard = "3.4"
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "ico"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "blocking", "native-tls"] }
 rfd = { version = "0.15", default-features = false }
 webbrowser = "1.0"
@@ -47,4 +48,3 @@ winprint = { version = "0.2", default-features = false }
 
 [build-dependencies]
 winres = "0.1"
-image = { version = "0.25", default-features = false, features = ["png", "ico"] }

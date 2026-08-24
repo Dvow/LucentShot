@@ -36,10 +36,6 @@ pub fn cache_dir() -> PathBuf {
     dir
 }
 
-pub fn icon_file() -> PathBuf {
-    exe_dir().join("icon.png")
-}
-
 #[cfg(feature = "ocr")]
 pub fn tessdata_dir() -> PathBuf {
     exe_dir().join("tessdata")

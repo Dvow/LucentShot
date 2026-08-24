@@ -1,0 +1,53 @@
+name: Rust Auto Builder
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: choco install innosetup --no-progress -y
+
+      - name: Package
+        id: pkg
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory -Force dist, dist/tessdata | Out-Null
+          Copy-Item target/release/lucentshot.exe, assets/tesseract.dll, assets/leptonica-1.85.0.dll, installer/Install-LucentShot.ps1 dist/
+          Copy-Item assets/eng.traineddata dist/tessdata/
+          Compress-Archive -Path dist/lucentshot.exe, dist/tesseract.dll, dist/leptonica-1.85.0.dll, dist/Install-LucentShot.ps1, dist/tessdata -DestinationPath "dist/LucentShot-$ver-portable.zip"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=$ver installer\lucentshot.iss
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-build
+          path: |
+            dist/LucentShot-*-setup.exe
+            dist/LucentShot-*-portable.zip
+
+      - name: Publish GitHub Release if version is new
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.pkg.outputs.version }}'
+          $tag = "v$ver"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Host "$tag exists — bump Cargo.toml to publish"; exit 0 }
+          gh release create $tag --target ${{ github.sha }} --title "LucentShot $tag" --generate-notes `
+            "dist/LucentShot-$ver-setup.exe" "dist/LucentShot-$ver-portable.zip"

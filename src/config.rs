@@ -176,28 +176,19 @@ fn bootstrap_path() -> PathBuf {
 }
 
 fn config_path_from_bootstrap() -> PathBuf {
-    for bootstrap in [
-        bootstrap_path(),
-        std::env::temp_dir().join("lightshotv2_config_path.txt"),
-    ] {
-        let Ok(s) = fs::read_to_string(bootstrap) else {
-            continue;
-        };
-        let s = s.trim();
-        if !s.is_empty() {
-            return PathBuf::from(s);
-        }
+    let Ok(s) = fs::read_to_string(bootstrap_path()) else {
+        return default_config_path();
+    };
+    let s = s.trim();
+    if s.is_empty() {
+        default_config_path()
+    } else {
+        PathBuf::from(s)
     }
-    default_config_path()
 }
 
 fn load_from_disk() -> Option<Config> {
-    let path = config_path_from_bootstrap();
-    if let Ok(data) = fs::read_to_string(&path) {
-        return serde_json::from_str(&data).ok();
-    }
-    let legacy = std::env::temp_dir().join("lightshotv2_config.json");
-    let data = fs::read_to_string(legacy).ok()?;
+    let data = fs::read_to_string(config_path_from_bootstrap()).ok()?;
     serde_json::from_str(&data).ok()
 }
 
