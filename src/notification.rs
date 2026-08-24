@@ -6,7 +6,7 @@ pub fn show(title: &str, body: &str) {
     static ICON_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
     let path = ICON_PATH.get_or_init(|| {
         let path = std::env::temp_dir().join("lightshot_clone_icon.png");
-        let _ = std::fs::write(&path, include_bytes!("icon/icon.png"));
+        let _ = std::fs::write(&path, include_bytes!("../assets/icons/icon.png"));
         path
     });
 

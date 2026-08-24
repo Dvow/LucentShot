@@ -13,7 +13,7 @@ LegalCopyright = "Copyright (C) 2025"
 
 [features]
 default = ["ocr"]
-ocr = ["dep:tesseract-static", "dep:tts"]
+ocr = ["dep:dlopen", "dep:tts"]
 
 [profile.release]
 strip = true
@@ -38,15 +38,12 @@ tiny-skia = "0.11"
 resvg = { version = "0.45", default-features = false }
 tray-icon = { version = "0.14", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
-tesseract-static = { version = "0.2", default-features = false, optional = true }
+dlopen = { version = "0.1.8", optional = true }
 tts = { version = "0.26", default-features = false, optional = true }
 dirs = "5.0"
 windows = { version = "0.56", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
 tauri-winrt-notification = "0.7"
 winprint = { version = "0.2", default-features = false }
-
-[patch.crates-io]
-tesseract-static = { path = "assets/tesseract-static" }
 
 [build-dependencies]
 winres = "0.1"

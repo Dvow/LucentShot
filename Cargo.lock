@@ -2084,6 +2084,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "dirs",
+ "dlopen",
  "eframe",
  "image",
  "imageproc",
@@ -2093,7 +2094,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tauri-winrt-notification",
- "tesseract-static",
  "tiny-skia",
  "tray-icon",
  "tts",
@@ -3970,13 +3970,6 @@ dependencies = [
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tesseract-static"
-version = "0.2.1"
-dependencies = [
- "dlopen",
 ]
 
 [[package]]

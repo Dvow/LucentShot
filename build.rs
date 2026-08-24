@@ -1,6 +1,6 @@
 fn main() {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let icon_png = manifest_dir.join("src").join("icon").join("icon.png");
+    let icon_png = manifest_dir.join("assets").join("icons").join("icon.png");
     let icon_ico = std::env::var("OUT_DIR").unwrap() + "/icon.ico";
     if icon_png.exists() {
         use image::ImageEncoder;

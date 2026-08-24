@@ -11,6 +11,8 @@ mod notification;
 mod ocr;
 mod overlay;
 mod settings;
+#[cfg(feature = "ocr")]
+mod tesseract;
 
 use eframe::egui;
 use std::sync::atomic::AtomicBool;
@@ -19,8 +21,8 @@ use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
 fn load_tray_icon() -> Icon {
-    let img =
-        image::load_from_memory(include_bytes!("icon/icon.png")).expect("Failed to load tray icon");
+    let img = image::load_from_memory(include_bytes!("../assets/icons/icon.png"))
+        .expect("Failed to load tray icon");
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let (w, h, data) = if w > 32 || h > 32 {
@@ -58,7 +60,7 @@ fn main() {
         .with_inner_size([0.0, 0.0])
         .with_taskbar(false)
         .with_transparent(true);
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("icon/icon.png")) {
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/icon.png")) {
         viewport = viewport.with_icon(Arc::new(icon));
     }
 

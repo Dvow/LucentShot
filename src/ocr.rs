@@ -2,13 +2,13 @@ use anyhow::{anyhow, Result};
 use image::DynamicImage;
 
 #[cfg(feature = "ocr")]
+use crate::tesseract::TessBaseApi;
+#[cfg(feature = "ocr")]
 use image::imageops::FilterType;
 #[cfg(feature = "ocr")]
 use std::ffi::CString;
 #[cfg(feature = "ocr")]
 use std::sync::{LazyLock, Mutex};
-#[cfg(feature = "ocr")]
-use tesseract_static::tesseract_plumbing::TessBaseApi;
 
 pub fn show_error(msg: &str) {
     rfd::MessageDialog::new()
