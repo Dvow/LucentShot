@@ -2,7 +2,7 @@
 name = "lucentshot"
 version = "1.5.1"
 edition = "2021"
-description = "A fast Windows screenshot tool"
+description = "A fast Windows screenshot tool, inspired by Lightshot"
 build = "build.rs"
 
 [package.metadata.winres]

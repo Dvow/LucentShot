@@ -1,6 +1,6 @@
 # LucentShot
 
-A fast Windows screenshot tool. Capture a region, mark it up, then copy, save, print, or share it.
+A fast Windows screenshot tool, inspired by Lightshot. Capture a region, mark it up, then copy, save, print, or share it.
 
 It lives in the tray. Press **Print Screen** or left-click the tray icon, then drag.
 
