@@ -53,7 +53,7 @@ Change these in **Settings → Hotkeys**.
 
 ## Install
 
-Download a [release](https://github.com/Dvow/lightshotv2/releases): the setup exe, or the portable zip. A new `version` in `Cargo.toml` on `main`/`master` publishes that release.
+Download a [release](https://github.com/Dvow/LucentShot/releases): the setup exe, or the portable zip. A new `version` in `Cargo.toml` on `main`/`master` publishes that release.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-LucentShot.ps1
@@ -62,8 +62,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-LucentShot.ps1
 That puts LucentShot in `%LOCALAPPDATA%\Programs\LucentShot` and adds Start Menu + **Apps & features** uninstall. Or run `lucentshot.exe` from the zip; keep the DLLs and `tessdata` beside it.
 
 ```powershell
-git clone https://github.com/Dvow/lightshotv2.git
-cd lightshotv2
+git clone https://github.com/Dvow/LucentShot.git
+cd LucentShot
 cargo build --release
 .\installer\Install-LucentShot.ps1
 ```
