@@ -121,7 +121,7 @@ impl OverlayApp {
         egui::Popup::close_all(ctx);
 
         let (vx, vy, vw, vh) = crate::capture::virtual_screen_bounds();
-        let ppp = ctx.pixels_per_point();
+        let ppp = ctx.pixels_per_point().max(0.1);
         send_cmds(
             ctx,
             [
@@ -302,6 +302,8 @@ fn send_cmds(ctx: &egui::Context, cmds: impl IntoIterator<Item = ViewportCommand
 }
 
 fn hide_main_window(ctx: &egui::Context) {
+    let (vx, vy, vw, vh) = crate::capture::virtual_screen_bounds();
+    let ppp = ctx.pixels_per_point().max(0.1);
     send_cmds(
         ctx,
         [
@@ -313,9 +315,17 @@ fn hide_main_window(ctx: &egui::Context) {
             ViewportCommand::Decorations(false),
             ViewportCommand::Transparent(true),
             ViewportCommand::Title(crate::paths::APP_NAME.into()),
+            ViewportCommand::OuterPosition(egui::pos2(vx as f32 / ppp, vy as f32 / ppp)),
+            ViewportCommand::InnerSize(egui::vec2(vw as f32 / ppp, vh as f32 / ppp)),
             ViewportCommand::Visible(false),
         ],
     );
+}
+
+fn overlay_screen_rect(ctx: &egui::Context) -> Rect {
+    let (_, _, vw, vh) = crate::capture::virtual_screen_bounds();
+    let ppp = ctx.pixels_per_point().max(0.1);
+    Rect::from_min_size(Pos2::ZERO, egui::vec2(vw as f32 / ppp, vh as f32 / ppp))
 }
 
 fn force_present_window(x: i32, y: i32, w: i32, h: i32) {
@@ -589,7 +599,8 @@ impl OverlayApp {
     }
 
     fn paint_overlay(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let screen_rect = ctx.content_rect();
+        let screen_rect = overlay_screen_rect(ctx);
+        ui.set_clip_rect(screen_rect);
         if let Some(texture) = &self.texture {
             ui.painter().image(
                 texture.id(),

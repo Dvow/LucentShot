@@ -63,10 +63,11 @@ fn main() {
         .build()
         .expect("Tray icon build failed");
 
+    let (_, _, vw, vh) = capture::virtual_screen_bounds();
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
-        .with_visible(true)
-        .with_inner_size([0.0, 0.0])
+        .with_visible(false)
+        .with_inner_size([vw.max(1) as f32, vh.max(1) as f32])
         .with_taskbar(false)
         .with_transparent(true);
     let icon = app_icon();
