@@ -1,14 +1,14 @@
 [package]
-name = "snapture"
+name = "lucentshot"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
 [package.metadata.winres]
-FileDescription = "Snapture - Screenshot tool"
-ProductName = "Snapture"
-CompanyName = "Snapture"
-OriginalFilename = "snapture.exe"
+FileDescription = "LucentShot - Screenshot tool"
+ProductName = "LucentShot"
+CompanyName = "LucentShot"
+OriginalFilename = "lucentshot.exe"
 LegalCopyright = "Copyright (C) 2026"
 
 [features]

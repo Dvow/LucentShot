@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-pub const APP_NAME: &str = "Snapture";
+pub const APP_NAME: &str = "LucentShot";
 
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()

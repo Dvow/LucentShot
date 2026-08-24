@@ -33,7 +33,7 @@ fn main() {
     res.set_manifest(
         r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity name="snapture" version="0.1.0.0" processorArchitecture="*" type="win32"/>
+  <assemblyIdentity name="lucentshot" version="0.1.0.0" processorArchitecture="*" type="win32"/>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

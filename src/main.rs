@@ -43,14 +43,14 @@ fn main() {
     let menu = Menu::new();
     for (id, label) in [
         (overlay::MENU_ID_SETTINGS, "Settings"),
-        (overlay::MENU_ID_QUIT, "Exit Snapture"),
+        (overlay::MENU_ID_QUIT, "Exit LucentShot"),
     ] {
         let _ = menu.append(&MenuItem::with_id(MenuId::new(id), label, true, None));
     }
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Snapture — Left-click to screenshot")
+        .with_tooltip("LucentShot — Left-click to screenshot")
         .with_icon(load_tray_icon())
         .build()
         .expect("Tray icon build failed");
