@@ -493,7 +493,6 @@ impl eframe::App for OverlayApp {
         if self.show_settings {
             self.draw_settings(ui);
         }
-        ctx.request_repaint();
     }
 }
 

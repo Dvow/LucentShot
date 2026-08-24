@@ -81,6 +81,7 @@ fn main() {
         crate::paths::APP_NAME,
         eframe::NativeOptions {
             viewport,
+            vsync: false,
             ..Default::default()
         },
         Box::new(move |cc| {
