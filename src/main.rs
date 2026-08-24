@@ -42,6 +42,7 @@ fn load_tray_icon() -> Icon {
 
 fn main() {
     config::init();
+    notification::init();
     ocr::warm_engine();
 
     let menu = Menu::new();
