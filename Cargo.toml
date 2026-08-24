@@ -1,6 +1,6 @@
 [package]
 name = "lucentshot"
-version = "1.6.0"
+version = "1.6.1"
 edition = "2024"
 description = "A fast Windows screenshot tool, inspired by Lightshot"
 build = "build.rs"
@@ -35,13 +35,11 @@ anyhow = "1.0"
 ab_glyph = "0.2"
 imageproc = { version = "0.24", default-features = false }
 serde_json = "1.0"
-tiny-skia = "0.11"
 resvg = { version = "0.45", default-features = false }
 tray-icon = { version = "0.14", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 dlopen = { version = "0.1.8", optional = true }
 tts = { version = "0.26", default-features = false, optional = true }
-dirs = "5.0"
 windows = { version = "0.56", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse"] }
 tauri-winrt-notification = "0.7"
 winprint = { version = "0.2", default-features = false }

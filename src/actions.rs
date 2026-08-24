@@ -59,7 +59,7 @@ pub fn copy_text(text: &str) -> Result<()> {
 pub fn save_image(img: &DynamicImage) -> Result<bool> {
     let config = crate::config::get();
     let ext = config.format.extension();
-    let start_dir = dirs::picture_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let start_dir = crate::paths::pictures_dir();
     let mut index = 1;
     let mut file_name = format!("screenshot_{index}.{ext}");
     while start_dir.join(&file_name).exists() {

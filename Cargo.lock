@@ -2123,12 +2123,11 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lucentshot"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "ab_glyph",
  "anyhow",
  "arboard",
- "dirs",
  "dlopen",
  "eframe",
  "image",
@@ -2139,7 +2138,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tauri-winrt-notification",
- "tiny-skia",
  "tray-icon",
  "tts",
  "webbrowser",

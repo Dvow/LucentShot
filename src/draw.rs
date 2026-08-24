@@ -3,7 +3,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use image::{DynamicImage, Rgba};
 use imageproc::drawing::draw_text_mut;
 use std::sync::OnceLock;
-use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap};
+use resvg::tiny_skia::{self, Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tool {

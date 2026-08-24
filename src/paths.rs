@@ -14,7 +14,8 @@ pub fn exe_dir() -> PathBuf {
 pub fn data_dir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = dirs::data_local_dir()
+        let dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
             .unwrap_or_else(exe_dir)
             .join(APP_NAME);
         let _ = std::fs::create_dir_all(&dir);
@@ -35,6 +36,12 @@ pub fn cache_dir() -> PathBuf {
     let dir = data_dir().join("cache");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+pub fn pictures_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(|p| PathBuf::from(p).join("Pictures"))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(feature = "ocr")]
