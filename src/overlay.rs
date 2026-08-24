@@ -5,13 +5,10 @@ use crate::hotkey::{HotkeyEvent, HotkeyHandle};
 use crate::settings::SettingsState;
 use eframe::egui::{self, Color32, Id, Key, Pos2, Rect, Stroke, ViewportCommand};
 use image::DynamicImage;
-use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::thread;
-use tray_icon::menu::MenuEvent;
-use tray_icon::{MouseButton, TrayIconEvent};
 
 pub const MENU_ID_QUIT: &str = "menu_quit";
 pub const MENU_ID_SETTINGS: &str = "menu_settings";
@@ -31,6 +28,7 @@ pub struct OverlayApp {
     active_shape: Option<Shape>,
     is_active: bool,
     trigger_flag: Arc<AtomicBool>,
+    settings_flag: Arc<AtomicBool>,
     marker_opacity: f32,
     rect_filled: bool,
     editing_text_index: Option<usize>,
@@ -53,6 +51,7 @@ pub struct OverlayApp {
 impl OverlayApp {
     pub fn new(
         trigger_flag: Arc<AtomicBool>,
+        settings_flag: Arc<AtomicBool>,
         hotkey_handle: HotkeyHandle,
         hotkey_rx: Receiver<HotkeyEvent>,
     ) -> Self {
@@ -73,6 +72,7 @@ impl OverlayApp {
             active_shape: None,
             is_active: false,
             trigger_flag,
+            settings_flag,
             marker_opacity: config.marker_opacity,
             rect_filled: false,
             editing_text_index: None,
@@ -401,26 +401,8 @@ impl eframe::App for OverlayApp {
 
 impl OverlayApp {
     fn poll_external_events(&mut self, ctx: &egui::Context) {
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == MENU_ID_QUIT {
-                process::exit(0);
-            }
-            if event.id == MENU_ID_SETTINGS {
-                self.open_settings(ctx);
-            }
-        }
-
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if matches!(
-                event,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    ..
-                }
-            ) {
-                self.trigger_flag.store(true, Ordering::SeqCst);
-                break;
-            }
+        if self.settings_flag.swap(false, Ordering::SeqCst) {
+            self.open_settings(ctx);
         }
 
         while let Ok(event) = self.hotkey_rx.try_recv() {

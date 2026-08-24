@@ -16,10 +16,11 @@ mod settings;
 mod tesseract;
 
 use eframe::egui;
-use std::sync::atomic::AtomicBool;
+use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tray_icon::menu::{Menu, MenuId, MenuItem};
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
+use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
 
 pub(crate) fn app_icon() -> image::RgbaImage {
     image::load_from_memory(include_bytes!("../assets/icons/icon.ico"))
@@ -84,6 +85,12 @@ fn main() {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
             let trigger_flag = Arc::new(AtomicBool::new(false));
+            let settings_flag = Arc::new(AtomicBool::new(false));
+            bind_tray_events(
+                cc.egui_ctx.clone(),
+                Arc::clone(&trigger_flag),
+                Arc::clone(&settings_flag),
+            );
             let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
             let hotkey_handle = hotkey::start_listener(
                 cc.egui_ctx.clone(),
@@ -93,6 +100,7 @@ fn main() {
             );
             Ok(Box::new(overlay::OverlayApp::new(
                 trigger_flag,
+                settings_flag,
                 hotkey_handle,
                 hotkey_rx,
             )))
@@ -102,4 +110,35 @@ fn main() {
     if let Err(err) = result {
         eprintln!("eframe failed: {err}");
     }
+}
+
+fn bind_tray_events(
+    ctx: egui::Context,
+    trigger_flag: Arc<AtomicBool>,
+    settings_flag: Arc<AtomicBool>,
+) {
+    MenuEvent::set_event_handler(Some({
+        let ctx = ctx.clone();
+        move |event: MenuEvent| {
+            if event.id == overlay::MENU_ID_QUIT {
+                process::exit(0);
+            }
+            if event.id == overlay::MENU_ID_SETTINGS {
+                settings_flag.store(true, Ordering::SeqCst);
+                ctx.request_repaint();
+            }
+        }
+    }));
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        if matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                ..
+            }
+        ) {
+            trigger_flag.store(true, Ordering::SeqCst);
+            ctx.request_repaint();
+        }
+    }));
 }
